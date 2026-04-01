@@ -189,81 +189,50 @@ async function loadAll() {
   btn.disabled = true; btn.classList.add('spin');
   setBtn('Loading…');
   allLoading();
-  prog(5, 'Probing Opening Night game to detect ABS structure…');
+  prog(5, 'Fetching 2026 MLB schedule…');
 
   try {
-    // ── DIAGNOSTIC PROBE ──────────────────────────────────────
-    // Game 823243 = Yankees @ Giants Opening Night March 26 2026
-    // José Caballero made the FIRST ever ABS challenge in this game
-    // We probe this known game to see exactly how MLB tags challenges
-    const PROBE_PK = 823243;
-    prog(10, 'Fetching Opening Night game feed (Yankees @ Giants)…');
-    const probeData = await mlbGet(`${MLB2}/game/${PROBE_PK}/feed/live`);
-    const probePlays = probeData?.liveData?.plays?.allPlays || [];
+    // 1. Get all game PKs for the season
+    const gamePks = await fetchAllGamePks();
+    prog(20, `Found ${gamePks.length} games — fetching ABS challenges…`);
 
-    console.log(`=== DIAGNOSTIC: Game ${PROBE_PK} ===`);
-    console.log(`Total at-bats: ${probePlays.length}`);
+    if (!gamePks.length) throw new Error('No games found for this season/type.');
 
-    // Log every unique event type seen in this game
-    const eventTypes = {};
-    const allEvents = probePlays.flatMap(p => p.playEvents || []);
-    allEvents.forEach(ev => {
-      eventTypes[ev.type] = (eventTypes[ev.type] || 0) + 1;
-    });
-    console.log('Event types in game:', JSON.stringify(eventTypes));
+    // 2. For each game, fetch play-by-play and extract ABS events
+    // Process in parallel batches of 8 for speed
+    const challenges = [];
+    const gameInfoMap = {};
+    const BATCH = 8;
+    let done = 0;
 
-    // Log any event where hasReview is true
-    const reviewPitches = allEvents.filter(ev => ev.details?.hasReview === true);
-    console.log(`Pitches with hasReview=true: ${reviewPitches.length}`);
-    if (reviewPitches.length > 0) {
-      console.log('First review pitch:', JSON.stringify(reviewPitches[0]).slice(0, 1000));
-    }
-
-    // Log any event of type 'review'
-    const reviewEvents = allEvents.filter(ev => ev.type === 'review');
-    console.log(`Events of type 'review': ${reviewEvents.length}`);
-    if (reviewEvents.length > 0) {
-      console.log('First review event:', JSON.stringify(reviewEvents[0]).slice(0, 1000));
-    }
-
-    // Log ALL events from the 4th inning (where Caballero challenged)
-    const inn4plays = probePlays.filter(p => p.about?.inning === 4);
-    console.log(`4th inning at-bats: ${inn4plays.length}`);
-    inn4plays.forEach((p, i) => {
-      const evts = p.playEvents || [];
-      evts.forEach(ev => {
-        console.log(`  Inn4 AB${i} event:`, JSON.stringify({
-          type: ev.type,
-          desc: ev.details?.description,
-          hasReview: ev.details?.hasReview,
-          reviewDetails: ev.reviewDetails,
-          callCode: ev.details?.call?.code,
-          isChallenge: ev.isChallenge,
-          challenge: ev.challenge,
-        }));
+    for (let i = 0; i < gamePks.length; i += BATCH) {
+      const batch = gamePks.slice(i, i+BATCH);
+      const results = await Promise.allSettled(batch.map(pk => fetchGameChallenges(pk)));
+      results.forEach((r, j) => {
+        if (r.status === 'fulfilled' && r.value) {
+          challenges.push(...r.value.challenges);
+          if (r.value.gameInfo) gameInfoMap[batch[j]] = r.value.gameInfo;
+        }
       });
-    });
+      done += batch.length;
+      const pct = 20 + Math.round((done / gamePks.length) * 75);
+      prog(pct, `Processed ${done}/${gamePks.length} games…`);
+      await sleep(50); // breathe between batches
+    }
 
-    // Also log the raw play-level data for inning 4 plays
-    inn4plays.forEach((p, i) => {
-      if (p.about) console.log(`  Inn4 AB${i} about:`, JSON.stringify(p.about));
-      if (p.result) console.log(`  Inn4 AB${i} result:`, JSON.stringify(p.result));
-    });
+    prog(96, 'Building leaderboards…');
 
-    prog(100, 'Diagnostic complete — check Console for ABS data structure');
+    // 3. Aggregate
+    const players = buildPlayerStats(challenges);
+    const umpires = buildUmpireStats(challenges);
+
+    DB = { challenges, games: gameInfoMap, players, umpires };
+    lastUpdated = new Date();
+    prog(100, 'Done!');
     await sleep(300);
     progOff();
-
-    // Show diagnostic results in the UI
-    $('cnt-scorecards').innerHTML = `
-      <div class="alert info">
-        🔬 <strong>Diagnostic mode:</strong> Check your browser Console (F12) for the ABS data structure from Opening Night.
-        Found ${reviewPitches.length} pitches with hasReview=true and ${reviewEvents.length} review-type events.
-        Event types seen: ${JSON.stringify(eventTypes)}
-      </div>`;
-
-    lastUpdated = new Date();
     updateStatus();
+    renderTab(activeTab);
 
   } catch(err) {
     console.error(err);
@@ -343,32 +312,27 @@ function extractChallenges(data, gamePk, gameInfo) {
       if (ev.type === 'pitch') totalPitches++;
       if (!isABSEvent(ev)) continue;
 
-      // For 'review' type events, the data is directly on the event
-      // For 'pitch' type events with hasReview, reviewDetails is nested
-      const rev = ev.reviewDetails || ev || {};
+      // ABS challenge data lives in reviewDetails on the pitch event
+      const rev = ev.reviewDetails || {};
+      const desc = ev.details?.description || '';
       
-      // Determine result
+      // Result: MLB uses challengeDecision = 'overturned' or 'confirmed' (or 'upheld')
+      const decision = (rev.challengeDecision || rev.decision || '').toLowerCase();
       let result = 'Unknown';
-      if (rev.isChallenge || ev.type === 'review') {
-        const decision = rev.challengeDecision || rev.decision || '';
-        result = decision.toLowerCase() === 'overturned' ? 'Overturned' : 'Confirmed';
-      } else {
-        result = getResultFromDesc(ev.details?.description || '');
-      }
+      if (decision === 'overturned') result = 'Overturned';
+      else if (decision === 'confirmed' || decision === 'upheld') result = 'Confirmed';
+      else result = getResultFromDesc(desc); // fallback to description text
       if (result === 'Unknown') continue;
 
       const matchup = play.matchup || {};
-      // For review events, count comes from the preceding pitch or the event itself
       const evCount = ev.count || {};
       const callCode = ev.details?.call?.code || '';
-      const desc = ev.details?.description || ev.description || '';
       const role = determineRole(callCode, desc);
       
-      // Challenger name: review events often have this directly
-      const challengerName = rev.challenger?.fullName 
-        || ev.challenger?.fullName
+      // Challenger: MLB may put this in reviewDetails.challenger or we infer from role
+      const challengerName = rev.challenger?.fullName
         || (role === 'Batter' ? matchup.batter?.fullName : matchup.pitcher?.fullName)
-        || matchup.batter?.fullName 
+        || matchup.batter?.fullName
         || '?';
 
       found.push({
@@ -393,32 +357,18 @@ function extractChallenges(data, gamePk, gameInfo) {
     }
   }
 
-  // Log first game's review events so we can see the exact structure
-  const reviewEvents = plays.flatMap(p=>p.playEvents||[]).filter(e=>e.type==='review');
-  if (reviewEvents.length > 0) {
-    console.log(`Game ${gamePk}: Found ${reviewEvents.length} review events:`, JSON.stringify(reviewEvents[0]).slice(0,800));
-  } else if (totalPitches > 0 && found.length === 0 && gamePk < 823300) {
-    // Log sample from early games only to avoid spam
-    const sample = plays.flatMap(p=>p.playEvents||[]).find(e=>e.type==='pitch');
-    if (sample) console.log(`Game ${gamePk} (${totalPitches} pitches, no review events). Sample:`, JSON.stringify(sample).slice(0,400));
+  if (found.length > 0) {
+    console.log(`✅ Game ${gamePk} (${gameInfo.away}@${gameInfo.home}): ${found.length} ABS challenges`);
   }
   return found;
 }
 
 // ABS event detection — MLB GUMBO uses several different patterns
 function isABSEvent(ev) {
-  // MLB GUMBO stores ABS challenges as type='review' events inside playEvents
-  if (ev.type === 'review') return true;
-  // Some pitches have hasReview flagged directly on them
-  if (ev.type === 'pitch' && ev.details?.hasReview === true) return true;
-  // reviewDetails block present on a pitch
-  if (ev.type === 'pitch' && ev.reviewDetails && Object.keys(ev.reviewDetails).length > 0) return true;
-  // Fallback: description text matching on pitch events
-  if (ev.type === 'pitch') {
-    const desc = (ev.details?.description || '').toLowerCase();
-    return ABS_DESC_TERMS.some(t => desc.includes(t));
-  }
-  return false;
+  // CONFIRMED: MLB tags ABS challenges as pitch events with hasReview=true
+  // There are no separate 'review' type events — the challenge is on the pitch itself
+  if (ev.type !== 'pitch') return false;
+  return ev.details?.hasReview === true;
 }
 
 function getResultFromDesc(desc) {
