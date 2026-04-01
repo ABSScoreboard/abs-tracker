@@ -143,17 +143,17 @@
 
 <script>
 // ═══════════════════════════════════════════════════
-// CONFIGURATION
+// CONFIG
 // ═══════════════════════════════════════════════════
 const MLB_API  = 'https://statsapi.mlb.com/api/v1';
 const MLB_API2 = 'https://statsapi.mlb.com/api/v1.1';
-const SEASON_START_R = '2026-03-26'; // Opening Night
-const SEASON_START_S = '2026-02-20'; // Spring Training start
-const SEASON_END_S   = '2026-03-25'; // Spring Training end
+const SEASON_START_R = '2026-03-26';
+const SEASON_START_S = '2026-02-20';
+const SEASON_END_S   = '2026-03-25';
 
-// ═══════════════════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════════════════
+// Red Sox @ Reds 3/28 — known to have Eugenio Suarez overturns vs C.B. Bucknor
+const KNOWN_CHALLENGE_GAME = 824541;
+
 let season = 'R';
 let activeTab = 'scorecards';
 let DB = { challenges: [], players: [], umpires: [] };
@@ -162,27 +162,21 @@ let lastUpdated = null;
 // ═══════════════════════════════════════════════════
 // DATE HELPERS
 // ═══════════════════════════════════════════════════
-
-// Returns yesterday's date as YYYY-MM-DD string
-// We use yesterday instead of today because today's games may not be final yet
 function yesterday() {
   const d = new Date();
   d.setDate(d.getDate() - 1);
   return d.toISOString().split('T')[0];
 }
 
-// Break a date range into month-sized chunks for the schedule API
 function monthChunks(startStr, endStr) {
   const chunks = [];
   let cur = new Date(startStr + 'T12:00:00Z');
   const end = new Date(endStr + 'T12:00:00Z');
   while (cur <= end) {
     const chunkStart = cur.toISOString().split('T')[0];
-    // End of current month
     const lastDay = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
     const chunkEnd = lastDay > end ? endStr : lastDay.toISOString().split('T')[0];
     chunks.push([chunkStart, chunkEnd]);
-    // Move to first of next month
     cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
     cur.setHours(12);
   }
@@ -190,104 +184,145 @@ function monthChunks(startStr, endStr) {
 }
 
 // ═══════════════════════════════════════════════════
-// MLB API — STEP 1: GET COMPLETED GAME PKs
+// STEP 0: PROBE A KNOWN GAME TO GET EXACT FIELD VALUES
+// Run this once on load to discover exact challengeDecision values
+// ═══════════════════════════════════════════════════
+async function probeKnownGame() {
+  try {
+    const data = await mlbFetch(`${MLB_API2}/game/${KNOWN_CHALLENGE_GAME}/feed/live`);
+    const plays = data?.liveData?.plays?.allPlays || [];
+    const reviewPitches = plays
+      .flatMap(p => p.playEvents || [])
+      .filter(ev => ev.type === 'pitch' && ev.details?.hasReview === true);
+
+    console.log(`=== PROBE: Game ${KNOWN_CHALLENGE_GAME} (BOS@CIN 3/28) ===`);
+    console.log(`Found ${reviewPitches.length} review pitches`);
+
+    // Log the COMPLETE reviewDetails of every review pitch
+    reviewPitches.forEach((ev, i) => {
+      console.log(`Review pitch ${i + 1}:`);
+      console.log('  details.description:', ev.details?.description);
+      console.log('  details.call.code:', ev.details?.call?.code);
+      console.log('  details.call.description:', ev.details?.call?.description);
+      console.log('  reviewDetails (full):', JSON.stringify(ev.reviewDetails));
+      console.log('  Top-level keys:', Object.keys(ev).join(', '));
+    });
+
+    return reviewPitches;
+  } catch (e) {
+    console.warn('Probe failed:', e.message);
+    return [];
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// STEP 1: GET COMPLETED GAME PKs
 // ═══════════════════════════════════════════════════
 async function fetchCompletedGamePks() {
-  const gameType = season === 'S' ? 'S' : 'R';
+  const gameType  = season === 'S' ? 'S' : 'R';
   const startDate = season === 'S' ? SEASON_START_S : SEASON_START_R;
-  // Always end at yesterday — never include today since games may not be final
-  const endDate = season === 'S' ? SEASON_END_S : yesterday();
+  const endDate   = season === 'S' ? SEASON_END_S   : yesterday();
 
-  console.log(`Fetching schedule: ${startDate} → ${endDate} (gameType=${gameType})`);
+  console.log(`Schedule: ${startDate} → ${endDate} (${gameType})`);
 
-  const chunks = monthChunks(startDate, endDate);
   const pks = [];
-
-  for (const [cs, ce] of chunks) {
+  for (const [cs, ce] of monthChunks(startDate, endDate)) {
     try {
-      const url = `${MLB_API}/schedule?sportId=1&startDate=${cs}&endDate=${ce}&gameType=${gameType}`;
-      const data = await mlbFetch(url);
-      let chunkFinal = 0;
-      let chunkTotal = 0;
-
-      for (const dateObj of (data.dates || [])) {
-        for (const game of (dateObj.games || [])) {
-          chunkTotal++;
-          const state = game.status?.abstractGameState;
-          // ONLY include games where abstractGameState is exactly 'Final'
-          if (state === 'Final') {
-            pks.push(game.gamePk);
-            chunkFinal++;
-          }
+      const data = await mlbFetch(`${MLB_API}/schedule?sportId=1&startDate=${cs}&endDate=${ce}&gameType=${gameType}`);
+      let n = 0;
+      for (const d of (data.dates || [])) {
+        for (const g of (d.games || [])) {
+          if (g.status?.abstractGameState === 'Final') { pks.push(g.gamePk); n++; }
         }
       }
-      console.log(`  ${cs}→${ce}: ${chunkFinal} Final games out of ${chunkTotal} total`);
-    } catch (e) {
-      console.warn(`  Schedule fetch failed for ${cs}→${ce}:`, e.message);
-    }
+      console.log(`  ${cs}→${ce}: ${n} Final games`);
+    } catch (e) { console.warn(`  Schedule failed ${cs}:`, e.message); }
   }
-
   const unique = [...new Set(pks)];
-  console.log(`Total completed games found: ${unique.length}`);
+  console.log(`Total Final games: ${unique.length}`);
   return unique;
 }
 
 // ═══════════════════════════════════════════════════
-// MLB API — STEP 2: EXTRACT ABS CHALLENGES FROM GAME
+// STEP 2: EXTRACT CHALLENGES — with flexible result detection
+// We log ALL possible result-related fields so we can see what MLB actually sends
 // ═══════════════════════════════════════════════════
-// CONFIRMED from diagnostic: ABS challenges appear as pitch events
-// where details.hasReview === true. The result and challenger info
-// live inside the reviewDetails object on that same pitch event.
+function determineResult(ev, isFirstGame) {
+  const rev = ev.reviewDetails || {};
+  const desc = (ev.details?.description || '').toLowerCase();
+  const callDesc = (ev.details?.call?.description || '').toLowerCase();
 
-async function fetchGameChallenges(gamePk) {
-  const url = `${MLB_API2}/game/${gamePk}/feed/live`;
-  const data = await mlbFetch(url);
+  // Log every possible field on the first game we process so we can tune
+  if (isFirstGame) {
+    console.log('reviewDetails keys:', Object.keys(rev));
+    console.log('reviewDetails values:', JSON.stringify(rev));
+    console.log('description:', ev.details?.description);
+    console.log('call.description:', ev.details?.call?.description);
+    console.log('call.code:', ev.details?.call?.code);
+  }
 
-  // Extract game metadata
-  const gd = data?.gameData || {};
+  // Try challengeDecision first (case-insensitive)
+  const decision = (rev.challengeDecision || rev.decision || '').toLowerCase().trim();
+  if (decision) {
+    if (decision.includes('overturn')) return 'Overturned';
+    if (decision.includes('confirm') || decision.includes('upheld') || decision.includes('stand')) return 'Confirmed';
+  }
+
+  // Try isOverturned boolean
+  if (rev.isOverturned === true) return 'Overturned';
+  if (rev.isOverturned === false) return 'Confirmed';
+
+  // Try inReview / reviewType
+  if (rev.inReview === false && rev.reviewType) {
+    // reviewType might be "overturned" or "confirmed"
+    const rt = (rev.reviewType || '').toLowerCase();
+    if (rt.includes('overturn')) return 'Overturned';
+    if (rt.includes('confirm') || rt.includes('stand')) return 'Confirmed';
+  }
+
+  // Fall back to the pitch description text
+  // "Ball changed to Called Strike" = overturned (batter's call changed)
+  // "Called Strike confirmed" = confirmed
+  // "Called Strike changed to Ball" = overturned (fielder's call changed)
+  if (desc.includes('changed to') || desc.includes('overturned') || desc.includes('reversed')) return 'Overturned';
+  if (desc.includes('confirmed') || desc.includes('upheld') || desc.includes('stands')) return 'Confirmed';
+  if (callDesc.includes('changed to') || callDesc.includes('overturned')) return 'Overturned';
+  if (callDesc.includes('confirmed') || callDesc.includes('upheld')) return 'Confirmed';
+
+  // Last resort: if the call code changed that means it was overturned
+  // B = ball, C = called strike. If the original was one and the review changed it, that's an overturn.
+  // We can't know this from just the pitch event, so default to Confirmed
+  return 'Confirmed';
+}
+
+async function fetchGameChallenges(gamePk, isFirstGame) {
+  const data = await mlbFetch(`${MLB_API2}/game/${gamePk}/feed/live`);
+
+  const gd     = data?.gameData || {};
   const home   = gd.teams?.home?.abbreviation || '?';
   const away   = gd.teams?.away?.abbreviation || '?';
   const date   = gd.datetime?.officialDate || '';
   const umpObj = (gd.officials || []).find(o => o.officialType === 'Home Plate');
   const umpire = umpObj?.official?.fullName || 'Unknown';
-  const gameInfo = { home, away, date, umpire };
 
-  // Walk every play and every pitch event, find ones with hasReview=true
   const plays = data?.liveData?.plays?.allPlays || [];
   const challenges = [];
+  let loggedFirst = false;
 
   for (const play of plays) {
-    const matchup = play.matchup || {};
-    const batter  = matchup.batter?.fullName || '?';
-    const pitcher = matchup.pitcher?.fullName || '?';
+    const matchup  = play.matchup || {};
+    const batter   = matchup.batter?.fullName  || '?';
+    const pitcher  = matchup.pitcher?.fullName || '?';
 
     for (const ev of (play.playEvents || [])) {
-      // Skip anything that is not a pitch
       if (ev.type !== 'pitch') continue;
-      // Skip pitches with no review — this is the confirmed ABS signal
       if (ev.details?.hasReview !== true) continue;
 
-      // Read the review details
-      const rev = ev.reviewDetails || {};
+      const shouldLog = isFirstGame && !loggedFirst;
+      loggedFirst = true;
 
-      // Determine result from challengeDecision field
-      // MLB uses: 'overturned', 'confirmed', 'upheld'
-      const decision = (rev.challengeDecision || '').toLowerCase();
-      let result;
-      if (decision === 'overturned') {
-        result = 'Overturned';
-      } else if (decision === 'confirmed' || decision === 'upheld') {
-        result = 'Confirmed';
-      } else {
-        // Fallback: infer from description text
-        const desc = (ev.details?.description || '').toLowerCase();
-        if (desc.includes('overturn')) result = 'Overturned';
-        else if (desc.includes('confirm') || desc.includes('upheld') || desc.includes('stands')) result = 'Confirmed';
-        else result = 'Confirmed'; // default to confirmed if unknown
-      }
+      const result = determineResult(ev, shouldLog);
 
-      // Determine role: who initiated the challenge?
-      // Batter challenges called strikes; fielder (catcher) challenges called balls
       const callCode = ev.details?.call?.code || '';
       const callDesc = (ev.details?.call?.description || ev.details?.description || '').toLowerCase();
       let role;
@@ -297,44 +332,40 @@ async function fetchGameChallenges(gamePk) {
         role = 'Fielder';
       }
 
-      // Challenger name — try reviewDetails first, then infer from role
+      const rev = ev.reviewDetails || {};
       const challenger = rev.challenger?.fullName
         || (role === 'Batter' ? batter : pitcher)
         || batter;
 
-      // Count at time of pitch
       const count = ev.count || {};
-
       challenges.push({
         game_pk:   gamePk,
         game_date: date,
-        home,
-        away,
-        umpire,
-        inning:    play.about?.inning || 0,
-        half:      play.about?.halfInning || '',
-        balls:     count.balls ?? 0,
-        strikes:   count.strikes ?? 0,
-        outs:      count.outs ?? 0,
-        batter,
-        pitcher,
-        challenger,
-        role,
-        result,
-        desc:      ev.details?.description || '',
+        home, away, umpire,
+        inning:  play.about?.inning || 0,
+        half:    play.about?.halfInning || '',
+        balls:   count.balls   ?? 0,
+        strikes: count.strikes ?? 0,
+        outs:    count.outs    ?? 0,
+        batter, pitcher, challenger, role, result,
+        desc: ev.details?.description || '',
+        rawDecision: (rev.challengeDecision || rev.decision || ''),
       });
     }
   }
 
-  if (challenges.length > 0) {
-    console.log(`✅ ${away}@${home} (${date}): ${challenges.length} ABS challenge(s)`);
+  if (challenges.length) {
+    const ov = challenges.filter(c => c.result === 'Overturned').length;
+    console.log(`✅ ${away}@${home} (${date}): ${challenges.length} challenges, ${ov} overturned`);
+    // Log the raw decision values so we can verify
+    challenges.forEach(c => console.log(`   → ${c.challenger}: rawDecision="${c.rawDecision}" desc="${c.desc}" → ${c.result}`));
   }
 
-  return { challenges, gameInfo };
+  return { challenges };
 }
 
 // ═══════════════════════════════════════════════════
-// MAIN LOAD PIPELINE
+// MAIN PIPELINE
 // ═══════════════════════════════════════════════════
 async function loadAll() {
   const btn = $('refresh-btn');
@@ -342,42 +373,40 @@ async function loadAll() {
   btn.classList.add('spin');
   setBtn('Loading…');
   allLoading();
-  prog(5, 'Fetching completed game schedule…');
+  prog(3, 'Probing known challenge game to detect field structure…');
 
   try {
-    // Step 1: get all completed gamePks
-    const gamePks = await fetchCompletedGamePks();
+    // Step 0: probe the known Suarez/Bucknor game first to learn exact field names
+    await probeKnownGame();
 
-    if (!gamePks.length) {
-      throw new Error('No completed games found. Check that the season has started and games are marked Final.');
-    }
+    prog(8, 'Fetching completed game schedule…');
+    const gamePks = await fetchCompletedGamePks();
+    if (!gamePks.length) throw new Error('No completed games found.');
 
     prog(15, `Found ${gamePks.length} completed games — fetching challenge data…`);
 
-    // Step 2: fetch challenge data for each game in parallel batches of 10
     const allChallenges = [];
     const BATCH = 10;
     let done = 0;
+    let isFirstGame = true;
 
     for (let i = 0; i < gamePks.length; i += BATCH) {
       const batch = gamePks.slice(i, i + BATCH);
       const results = await Promise.allSettled(
-        batch.map(pk => fetchGameChallenges(pk))
+        batch.map((pk, j) => fetchGameChallenges(pk, isFirstGame && j === 0))
       );
+      isFirstGame = false;
       for (const r of results) {
         if (r.status === 'fulfilled' && r.value?.challenges?.length) {
           allChallenges.push(...r.value.challenges);
         }
       }
       done += batch.length;
-      const pct = 15 + Math.round((done / gamePks.length) * 80);
-      prog(pct, `Processed ${done} / ${gamePks.length} games…`);
+      prog(15 + Math.round((done / gamePks.length) * 80), `Processed ${done} / ${gamePks.length} games…`);
       await sleep(30);
     }
 
     prog(97, 'Building leaderboards…');
-
-    // Step 3: aggregate
     DB = {
       challenges: allChallenges,
       players:    buildPlayerStats(allChallenges),
@@ -385,7 +414,8 @@ async function loadAll() {
     };
     lastUpdated = new Date();
 
-    console.log(`✅ Done. Total ABS challenges found: ${allChallenges.length}`);
+    const ov = allChallenges.filter(c => c.result === 'Overturned').length;
+    console.log(`✅ COMPLETE: ${allChallenges.length} challenges, ${ov} overturned (${allChallenges.length ? Math.round(100*ov/allChallenges.length) : 0}%)`);
 
     prog(100, 'Done!');
     await sleep(250);
@@ -436,9 +466,7 @@ function buildUmpireStats(challenges) {
 function gamesByDate() {
   const byGame = {};
   for (const c of DB.challenges) {
-    if (!byGame[c.game_pk]) {
-      byGame[c.game_pk] = { game_pk: c.game_pk, date: c.game_date, home: c.home, away: c.away, umpire: c.umpire, list: [] };
-    }
+    if (!byGame[c.game_pk]) byGame[c.game_pk] = { game_pk: c.game_pk, date: c.game_date, home: c.home, away: c.away, umpire: c.umpire, list: [] };
     byGame[c.game_pk].list.push(c);
   }
   const byDate = {};
@@ -461,16 +489,16 @@ function renderTab(tab) {
 
 function renderScorecards() {
   const el = $('cnt-scorecards');
-  if (!DB.challenges.length) { el.innerHTML = emptyHtml('⚾', 'No challenge data', 'No completed games with ABS challenges found yet.'); return; }
+  if (!DB.challenges.length) { el.innerHTML = emptyHtml('⚾','No challenge data','No completed games with ABS challenges found yet.'); return; }
   const byDate = gamesByDate();
   const dates = Object.keys(byDate).sort().reverse();
   let html = '';
   for (const date of dates) {
     html += `<div class="date-hd">${fmtDate(date)}</div>`;
-    for (const game of byDate[date].sort((a, b) => a.away.localeCompare(b.away))) {
+    for (const game of byDate[date].sort((a,b) => a.away.localeCompare(b.away))) {
       const tot = game.list.length;
       const ov  = game.list.filter(c => c.result === 'Overturned').length;
-      const pct = tot ? Math.round(100 * ov / tot) : 0;
+      const pct = tot ? Math.round(100*ov/tot) : 0;
       const tw  = scorecardTweet(game);
       html += `<div class="card">
         <div class="card-hd">
@@ -490,24 +518,22 @@ function renderScorecards() {
 function renderPlayers() {
   const el = $('cnt-players');
   const all = DB.players.filter(p => p.total >= 2);
-  if (!all.length) { el.innerHTML = emptyHtml('🏆', 'No player data', 'Refresh to load'); return; }
-  const top10 = all.slice(0, 10);
+  if (!all.length) { el.innerHTML = emptyHtml('🏆','No player data','Refresh to load'); return; }
+  const top10 = all.slice(0,10);
   const tw = playerTweet(top10);
   el.innerHTML = `
     <div class="card"><div class="card-hd"><div class="card-title">Top 10 Tweet Draft</div></div>
     <div class="tweet-box">${esc(tw)}</div>${twActs(tw)}</div>
     <div class="sec-hd" style="margin-top:20px"><span class="sec-ttl">FULL LEADERBOARD</span><span class="sec-sub">min. 2 challenges</span></div>
-    <div class="lb">${all.map((p, i) => playerRow(p, i)).join('')}</div>`;
+    <div class="lb">${all.map((p,i) => playerRow(p,i)).join('')}</div>`;
 }
 
 function playerRow(p, i) {
-  const rc  = i < 3 ? ['gold','silver','bronze'][i] : '';
-  const bar = Math.round(p.rate * 100);
-  const bdg = p.role === 'Batter' ? 'btr' : 'fld';
-  const lbl = p.role === 'Batter' ? 'Batter' : 'Catcher/P';
+  const rc = i<3?['gold','silver','bronze'][i]:'';
+  const bar = Math.round(p.rate*100);
   return `<div class="lb-row">
-    <div class="lb-rank ${rc}">${i + 1}</div>
-    <div><div class="lb-name">${esc(p.name)}</div><div class="lb-sub"><span class="badge ${bdg}">${lbl}</span></div></div>
+    <div class="lb-rank ${rc}">${i+1}</div>
+    <div><div class="lb-name">${esc(p.name)}</div><div class="lb-sub"><span class="badge ${p.role==='Batter'?'btr':'fld'}">${p.role==='Batter'?'Batter':'Catcher/P'}</span></div></div>
     <div><div class="bar-wrap"><div class="bar-fill bar-g" style="width:${bar}%"></div></div></div>
     <div class="lb-val green">${bar}%<br><span style="font-size:11px;color:var(--muted)">${p.ov}/${p.total}</span></div>
   </div>`;
@@ -516,17 +542,17 @@ function playerRow(p, i) {
 function renderUmpires() {
   const el = $('cnt-umpires');
   const umps = DB.umpires.filter(u => u.total >= 3);
-  if (!umps.length) { el.innerHTML = emptyHtml('🧑‍⚖️', 'No umpire data', 'Umpire data loads alongside game data. Refresh to try.'); return; }
+  if (!umps.length) { el.innerHTML = emptyHtml('🧑‍⚖️','No umpire data','Umpire data loads alongside game data.'); return; }
   const tw = umpireTweet(umps);
   el.innerHTML = `
     <div class="card"><div class="card-hd"><div class="card-title">Umpire Report Tweet Draft</div></div>
     <div class="tweet-box">${esc(tw)}</div>${twActs(tw)}</div>
     <div class="sec-hd" style="margin-top:20px"><span class="sec-ttl">FULL UMPIRE TABLE</span><span class="sec-sub">min. 3 challenges faced</span></div>
-    <div class="lb">${umps.slice(0, 25).map((u, i) => {
-      const rc = i < 3 ? ['gold','silver','bronze'][i] : '';
-      const bar = Math.round(u.rate * 100);
+    <div class="lb">${umps.slice(0,25).map((u,i) => {
+      const rc=i<3?['gold','silver','bronze'][i]:'';
+      const bar=Math.round(u.rate*100);
       return `<div class="lb-row">
-        <div class="lb-rank ${rc}">${i + 1}</div>
+        <div class="lb-rank ${rc}">${i+1}</div>
         <div><div class="lb-name">${esc(u.name)}</div><div class="lb-sub">${u.total} calls challenged</div></div>
         <div><div class="bar-wrap"><div class="bar-fill bar-r" style="width:${bar}%"></div></div></div>
         <div class="lb-val red">${bar}%<br><span style="font-size:11px;color:var(--muted)">${u.ov} overturned</span></div>
@@ -536,199 +562,142 @@ function renderUmpires() {
 
 function renderWeekly() {
   const el = $('cnt-weekly');
-  if (!DB.challenges.length) { el.innerHTML = emptyHtml('📅', 'No data', 'Refresh first'); return; }
-  const cut = new Date(); cut.setDate(cut.getDate() - 7);
+  if (!DB.challenges.length) { el.innerHTML = emptyHtml('📅','No data','Refresh first'); return; }
+  const cut = new Date(); cut.setDate(cut.getDate()-7);
   const cutStr = cut.toISOString().split('T')[0];
   const week = DB.challenges.filter(c => c.game_date >= cutStr);
-  const tot = week.length;
-  const ov  = week.filter(c => c.result === 'Overturned').length;
-  const wmap = {};
+  const tot = week.length, ov = week.filter(c=>c.result==='Overturned').length;
+  const wmap={};
   for (const c of week) {
-    if (!wmap[c.challenger]) wmap[c.challenger] = { name: c.challenger, role: c.role, total: 0, ov: 0 };
+    if (!wmap[c.challenger]) wmap[c.challenger]={name:c.challenger,role:c.role,total:0,ov:0};
     wmap[c.challenger].total++;
-    if (c.result === 'Overturned') wmap[c.challenger].ov++;
+    if (c.result==='Overturned') wmap[c.challenger].ov++;
   }
-  const topW = Object.values(wmap).filter(p => p.total >= 2)
-    .map(p => ({ ...p, rate: p.ov / p.total }))
-    .sort((a, b) => b.rate - a.rate || b.ov - a.ov)
-    .slice(0, 5);
-  const biggest = [...week].sort((a, b) => Math.abs(b.we || 0) - Math.abs(a.we || 0))[0];
-  const tw  = weeklyTweet(topW, cutStr);
+  const topW = Object.values(wmap).filter(p=>p.total>=2)
+    .map(p=>({...p,rate:p.ov/p.total})).sort((a,b)=>b.rate-a.rate||b.ov-a.ov).slice(0,5);
+  const biggest = [...week].sort((a,b)=>Math.abs(b.we||0)-Math.abs(a.we||0))[0];
+  const tw = weeklyTweet(topW, cutStr);
   const hlTw = biggest ? highlightTweet(biggest) : null;
   el.innerHTML = `
     <div class="stats-grid">
       <div class="stat-card"><div class="big">${tot}</div><div class="lbl">Challenges</div></div>
       <div class="stat-card"><div class="big">${ov}</div><div class="lbl">Overturned</div></div>
-      <div class="stat-card"><div class="big">${tot ? Math.round(100*ov/tot) : 0}%</div><div class="lbl">Overturn rate</div></div>
-      <div class="stat-card"><div class="big">${topW.length}</div><div class="lbl">Active challengers</div></div>
+      <div class="stat-card"><div class="big">${tot?Math.round(100*ov/tot):0}%</div><div class="lbl">Overturn rate</div></div>
+      <div class="stat-card"><div class="big">${topW.length}</div><div class="lbl">Challengers</div></div>
     </div>
     <div class="sec-hd"><span class="sec-ttl">BEST CHALLENGERS OF THE WEEK</span></div>
     <div class="card"><div class="tweet-box">${esc(tw)}</div>${twActs(tw)}</div>
-    ${hlTw ? `<div class="sec-hd" style="margin-top:18px"><span class="sec-ttl">TOP MOMENT OF THE WEEK</span></div>
-    <div class="card"><div class="tweet-box">${esc(hlTw)}</div>${twActs(hlTw)}</div>` : ''}`;
+    ${hlTw?`<div class="sec-hd" style="margin-top:18px"><span class="sec-ttl">TOP MOMENT</span></div>
+    <div class="card"><div class="tweet-box">${esc(hlTw)}</div>${twActs(hlTw)}</div>`:''}`;
 }
 
 // ═══════════════════════════════════════════════════
 // TWEET BUILDERS
 // ═══════════════════════════════════════════════════
-const MED = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
+const MED=['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
 
 function scorecardTweet(game) {
-  const tot = game.list.length;
-  const ov  = game.list.filter(c => c.result === 'Overturned').length;
-  const pct = tot ? Math.round(100 * ov / tot) : 0;
-  const lines = [
-    `📋 ABS SCORECARD | ${game.away} @ ${game.home}`,
-    `📅 ${fmtDate(game.date)}  |  HP Ump: ${game.umpire}`,
-    '',
-  ];
-  for (const c of game.list.slice(0, 8)) {
-    const e = c.result === 'Overturned' ? '✅' : '❌';
-    const r = c.role === 'Batter' ? '🏏' : '🧤';
+  const tot=game.list.length, ov=game.list.filter(c=>c.result==='Overturned').length;
+  const pct=tot?Math.round(100*ov/tot):0;
+  const lines=[`📋 ABS SCORECARD | ${game.away} @ ${game.home}`,`📅 ${fmtDate(game.date)}  |  HP Ump: ${game.umpire}`,``];
+  for (const c of game.list.slice(0,8)) {
+    const e=c.result==='Overturned'?'✅':'❌', r=c.role==='Batter'?'🏏':'🧤';
     lines.push(`${e}${r} ${c.challenger} (Inn ${c.inning}, ${c.balls}-${c.strikes}) → ${c.result}`);
   }
-  if (game.list.length > 8) lines.push(`  …+${game.list.length - 8} more`);
-  lines.push('', `Total: ${ov}/${tot} overturned (${pct}%)`, '', `#MLB #ABSChallenge #${game.away} #${game.home}`);
+  if (game.list.length>8) lines.push(`  …+${game.list.length-8} more`);
+  lines.push(``,`Total: ${ov}/${tot} overturned (${pct}%)`,``,`#MLB #ABSChallenge #${game.away} #${game.home}`);
   return lines.join('\n');
 }
 
 function playerTweet(top) {
-  const lbl = season === 'S' ? 'SPRING TRAINING' : '2026 SEASON';
-  const lines = [`📊 TOP ABS CHALLENGERS — ${lbl}`, `(min. 2 challenges)`, ''];
-  top.forEach((p, i) => {
-    const r = p.role === 'Batter' ? '🏏' : '🧤';
-    lines.push(`${MED[i] || `${i+1}.`} ${r} ${p.name}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
+  const lbl=season==='S'?'SPRING TRAINING':'2026 SEASON';
+  const lines=[`📊 TOP ABS CHALLENGERS — ${lbl}`,`(min. 2 challenges)`,``];
+  top.forEach((p,i)=>{
+    const r=p.role==='Batter'?'🏏':'🧤';
+    lines.push(`${MED[i]||`${i+1}.`} ${r} ${p.name}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
   });
-  lines.push('', '#MLB #ABSChallenge #RoboUmp');
+  lines.push(``,`#MLB #ABSChallenge #RoboUmp`);
   return lines.join('\n');
 }
 
 function umpireTweet(umps) {
-  const lbl = season === 'S' ? 'SPRING TRAINING' : '2026 SEASON';
-  const lines = [`🧑‍⚖️ UMPIRE ABS ACCURACY — ${lbl}`, `(% of calls overturned when challenged)`, ''];
-  umps.slice(0, 10).forEach((u, i) => {
-    lines.push(`${MED[i] || `${i+1}.`} ${u.name}  ${Math.round(u.rate*100)}% (${u.ov}/${u.total})`);
+  const lbl=season==='S'?'SPRING TRAINING':'2026 SEASON';
+  const lines=[`🧑‍⚖️ UMPIRE ABS ACCURACY — ${lbl}`,`(% of calls overturned when challenged)`,``];
+  umps.slice(0,10).forEach((u,i)=>{
+    lines.push(`${MED[i]||`${i+1}.`} ${u.name}  ${Math.round(u.rate*100)}% (${u.ov}/${u.total})`);
   });
-  lines.push('', '(min. 3 challenges faced)  #MLB #ABSChallenge #Umpires');
+  lines.push(``,`(min. 3 challenges faced)  #MLB #ABSChallenge #Umpires`);
   return lines.join('\n');
 }
 
-function weeklyTweet(top, since) {
-  const lines = [`🏆 BEST ABS CHALLENGERS THIS WEEK`, `(${fmtDate(since)} → today)`, ''];
-  top.forEach((p, i) => {
-    const r = p.role === 'Batter' ? '🏏' : '🧤';
-    lines.push(`${MED[i] || `${i+1}.`} ${r} ${p.name}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
+function weeklyTweet(top,since) {
+  const lines=[`🏆 BEST ABS CHALLENGERS THIS WEEK`,`(${fmtDate(since)} → today)`,``];
+  top.forEach((p,i)=>{
+    const r=p.role==='Batter'?'🏏':'🧤';
+    lines.push(`${MED[i]||`${i+1}.`} ${r} ${p.name}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
   });
-  lines.push('', '#MLB #ABSChallenge');
+  lines.push(``,`#MLB #ABSChallenge`);
   return lines.join('\n');
 }
 
 function highlightTweet(c) {
-  const e = c.result === 'Overturned' ? '✅' : '❌';
-  const r = c.role === 'Batter' ? '🏏' : '🧤';
-  return [
-    `🔥 ABS HIGHLIGHT OF THE WEEK`, '',
-    `${e}${r} ${c.challenger} challenged in the ${ord(c.inning)} inning (${c.balls}-${c.strikes} count)`,
-    `${c.away} @ ${c.home}  ·  ${fmtDate(c.game_date)}`,
-    `Result: ${c.result}  |  Umpire: ${c.umpire}`, '',
-    `#MLB #ABSChallenge`
-  ].join('\n');
+  const e=c.result==='Overturned'?'✅':'❌', r=c.role==='Batter'?'🏏':'🧤';
+  return [`🔥 ABS HIGHLIGHT OF THE WEEK`,``,`${e}${r} ${c.challenger} challenged in the ${ord(c.inning)} inning (${c.balls}-${c.strikes} count)`,`${c.away} @ ${c.home}  ·  ${fmtDate(c.game_date)}`,`Result: ${c.result}  |  Umpire: ${c.umpire}`,``,`#MLB #ABSChallenge`].join('\n');
 }
 
 // ═══════════════════════════════════════════════════
 // UI HELPERS
 // ═══════════════════════════════════════════════════
-function $(id) { return document.getElementById(id); }
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function fmtDate(d) { if (!d) return '?'; try { return new Date(d + 'T12:00:00').toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}); } catch { return d; } }
-function ord(n) { const s=['th','st','nd','rd'],v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
-
-async function mlbFetch(url) {
-  const r = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  if (!r.ok) throw new Error(`MLB API error ${r.status}`);
-  return r.json();
-}
-
-function prog(pct, lbl) {
-  $('prog-wrap').classList.add('on');
-  $('prog-bar').style.width = pct + '%';
-  $('prog-lbl').textContent = lbl;
-}
-function progOff() { $('prog-wrap').classList.remove('on'); }
-
-function allLoading() {
-  ['scorecards','players','umpires','weekly'].forEach(id => {
-    $(`cnt-${id}`).innerHTML = `<div class="spin-wrap"><div class="spinner"></div> Loading from MLB API…</div>`;
-  });
-}
-
-function showErr(msg) {
-  ['scorecards','players','umpires','weekly'].forEach(id => {
-    $(`cnt-${id}`).innerHTML = `
-      <div class="alert err">⚠️ ${esc(msg)}</div>
-      <div class="alert info">💡 Open the browser Console (F12) to see detailed error info. The MLB API is free and open — if you see a network error, try clicking Refresh Data again.</div>`;
-  });
-}
-
-function emptyHtml(ico, t, m) {
-  return `<div class="empty"><div class="ico">${ico}</div><h3>${t}</h3><p>${m}</p></div>`;
-}
-
-function updateStatus() {
-  const tot   = DB.challenges.length;
-  const ov    = DB.challenges.filter(c => c.result === 'Overturned').length;
-  const pct   = tot ? Math.round(100 * ov / tot) : 0;
-  const games = new Set(DB.challenges.map(c => c.game_pk)).size;
-  $('status-bar').innerHTML = `
+function $(id){return document.getElementById(id);}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function fmtDate(d){if(!d)return'?';try{return new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}catch{return d;}}
+function ord(n){const s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
+async function mlbFetch(url){const r=await fetch(url,{signal:AbortSignal.timeout(20000)});if(!r.ok)throw new Error(`MLB API ${r.status}`);return r.json();}
+function prog(pct,lbl){$('prog-wrap').classList.add('on');$('prog-bar').style.width=pct+'%';$('prog-lbl').textContent=lbl;}
+function progOff(){$('prog-wrap').classList.remove('on');}
+function allLoading(){['scorecards','players','umpires','weekly'].forEach(id=>{$(`cnt-${id}`).innerHTML=`<div class="spin-wrap"><div class="spinner"></div> Loading from MLB API…</div>`;});}
+function showErr(msg){['scorecards','players','umpires','weekly'].forEach(id=>{$(`cnt-${id}`).innerHTML=`<div class="alert err">⚠️ ${esc(msg)}</div><div class="alert info">💡 Open Console (F12) for details. Try clicking Refresh Data again.</div>`;});}
+function emptyHtml(ico,t,m){return `<div class="empty"><div class="ico">${ico}</div><h3>${t}</h3><p>${m}</p></div>`;}
+function updateStatus(){
+  const tot=DB.challenges.length, ov=DB.challenges.filter(c=>c.result==='Overturned').length;
+  const pct=tot?Math.round(100*ov/tot):0;
+  const games=new Set(DB.challenges.map(c=>c.game_pk)).size;
+  $('status-bar').innerHTML=`
     <div>⚾ Challenges: <strong>${tot}</strong></div><div class="sdiv"></div>
     <div>✅ Overturned: <strong>${ov}</strong></div><div class="sdiv"></div>
     <div>📊 Rate: <strong>${pct}%</strong></div><div class="sdiv"></div>
     <div>🎮 Games: <strong>${games}</strong></div><div class="sdiv"></div>
-    <div>🕐 Updated: <strong>${lastUpdated?.toLocaleTimeString() || '—'}</strong></div>`;
+    <div>🕐 Updated: <strong>${lastUpdated?.toLocaleTimeString()||'—'}</strong></div>`;
 }
-
-function twActs(t) {
-  const n = t.length, cls = n > 280 ? 'over' : '';
-  return `<div class="tweet-acts">
-    <span class="char-ct ${cls}">${n} / 280 chars</span>
+function twActs(t){
+  const n=t.length,cls=n>280?'over':'';
+  return `<div class="tweet-acts"><span class="char-ct ${cls}">${n} / 280 chars</span>
     <button class="copy-btn" onclick="cp(this,${JSON.stringify(t)})">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       Copy tweet</button></div>`;
 }
-
-function cp(btn, t) {
-  navigator.clipboard.writeText(t).then(() => {
-    btn.classList.add('ok'); btn.textContent = '✓ Copied!';
-    const tk = $('toast'); tk.classList.add('on');
-    setTimeout(() => tk.classList.remove('on'), 1800);
-    setTimeout(() => {
-      btn.classList.remove('ok');
-      btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy tweet`;
-    }, 2500);
-  }).catch(() => alert('Copy failed — please select and copy manually.'));
+function cp(btn,t){
+  navigator.clipboard.writeText(t).then(()=>{
+    btn.classList.add('ok');btn.textContent='✓ Copied!';
+    const tk=$('toast');tk.classList.add('on');
+    setTimeout(()=>tk.classList.remove('on'),1800);
+    setTimeout(()=>{btn.classList.remove('ok');btn.innerHTML=`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy tweet`;},2500);
+  }).catch(()=>alert('Copy failed — please select and copy manually.'));
 }
-
-function switchTab(btn, tab) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  btn.classList.add('active');
-  $(`tab-${tab}`).classList.add('active');
-  activeTab = tab;
-  if (DB.challenges.length) renderTab(tab);
+function switchTab(btn,tab){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');$(`tab-${tab}`).classList.add('active');
+  activeTab=tab;
+  if(DB.challenges.length) renderTab(tab);
 }
-
-function setSeason(s) {
-  season = s;
-  document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('active', b.dataset.s === s));
-  DB = { challenges: [], players: [], umpires: [] };
-  allLoading();
-  loadAll();
+function setSeason(s){
+  season=s;
+  document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('active',b.dataset.s===s));
+  DB={challenges:[],players:[],umpires:[]};allLoading();loadAll();
 }
-
-function setBtn(lbl) {
-  $('refresh-btn').innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> ${lbl}`;
-}
+function setBtn(lbl){$('refresh-btn').innerHTML=`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> ${lbl}`;}
 </script>
 </body>
 </html>
