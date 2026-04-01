@@ -166,6 +166,7 @@
     <button class="tab-btn" onclick="switchTab(this,'umpires')">🧑‍⚖️ Umpire Accuracy</button>
     <button class="tab-btn" onclick="switchTab(this,'weekly')">📅 Weekly Recap</button>
     <button class="tab-btn" onclick="switchTab(this,'h2h')">⚔️ Player vs. Umpire</button>
+    <button class="tab-btn" onclick="switchTab(this,'teamump')">🏟️ Team vs. Umpire</button>
   </div>
 
   <div class="tab-panel active" id="tab-scorecards">
@@ -188,6 +189,11 @@
   <div class="tab-panel" id="tab-h2h">
     <div class="sec-hd"><span class="sec-ttl">PLAYER VS. UMPIRE</span><span class="sec-sub">Head-to-head challenge history</span></div>
     <div id="cnt-h2h"><div class="empty"><div class="ico">⚔️</div><h3>No data yet</h3><p>Click Refresh Data first, then search a player or umpire</p></div></div>
+  </div>
+
+  <div class="tab-panel" id="tab-teamump">
+    <div class="sec-hd"><span class="sec-ttl">TEAM VS. UMPIRE</span><span class="sec-sub">Team challenge records &amp; umpire accuracy</span></div>
+    <div id="cnt-teamump"><div class="empty"><div class="ico">🏟️</div><h3>No data yet</h3><p>Click Refresh Data to load</p></div></div>
   </div>
 </main>
 <div id="toast">Copied!</div>
@@ -339,8 +345,23 @@ async function fetchGameChallenges(gamePk) {
       // Determine if batter or fielder (catcher/pitcher) challenged
       // Call code 'C' = called strike → batter challenges
       // Call code 'B' = ball → fielder (catcher) challenges
+      // Determine role by matching challenger name against batter/pitcher
+      // This is more reliable than using call codes alone.
+      // rev.player.fullName is the person who tapped their helmet.
       const callCode = ev.details?.call?.code || '';
-      const role = (callCode === 'C') ? 'Batter' : 'Fielder';
+      let role;
+      if (challenger === batter) {
+        role = 'Batter';
+      } else if (challenger === pitcher) {
+        role = 'Pitcher';
+      } else if (callCode === 'C') {
+        // Called strike → batter challenged (even if name didn't match exactly)
+        role = 'Batter';
+      } else {
+        // Ball called → fielder challenged. Default to Catcher since
+        // catchers initiate ~95% of fielder challenges.
+        role = 'Catcher';
+      }
 
       const count = ev.count || {};
 
@@ -496,12 +517,11 @@ function gamesByDate() {
 // ═══════════════════════════════════════════════════════════
 const MED = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
 
-// Role tag: always text labels, no emoji
-// Role is 'Batter', 'Fielder' (catcher), or 'Pitcher'
+// Role tag: text labels for tweet output
 function roleTag(role) {
   if (role === 'Batter')  return '(H)';  // Hitter
   if (role === 'Pitcher') return '(P)';  // Pitcher
-  return '(C)';                           // Catcher (default Fielder)
+  return '(C)';                           // Catcher (covers 'Catcher' and legacy 'Fielder')
 }
 
 // Format player name as "F. Last" to guarantee fit within 280 chars
@@ -634,6 +654,7 @@ function renderTab(tab) {
   else if (tab === 'umpires') renderUmpires();
   else if (tab === 'weekly') renderWeekly();
   else if (tab === 'h2h') renderH2H();
+  else if (tab === 'teamump') renderTeamUmp();
 }
 
 function renderScorecards() {
@@ -1064,32 +1085,42 @@ function h2hResults(playerFilter, umpireFilter) {
   let barChartHtml = '';
 
   if (playerFilter && !umpireFilter) {
-    // Challenges per umpire
+    // Umpire breakdown: for each umpire this player has challenged,
+    // show a card with their record and a win-rate bar.
     const byUmp = {};
     filtered.forEach(c => {
       if (!byUmp[c.umpire]) byUmp[c.umpire] = { total: 0, ov: 0 };
       byUmp[c.umpire].total++;
       if (c.result === 'Overturned') byUmp[c.umpire].ov++;
     });
-    const rows = Object.entries(byUmp).sort((a, b) => b[1].total - a[1].total).slice(0, 8);
-    const maxTotal = Math.max(...rows.map(r => r[1].total));
+    // Sort: most challenges first, then by success rate
+    const rows = Object.entries(byUmp)
+      .sort((a, b) => b[1].total - a[1].total || b[1].ov/b[1].total - a[1].ov/a[1].total);
 
     barChartHtml = `
       <div class="card">
-        <div class="card-title" style="margin-bottom:14px;">Challenges by Umpire</div>
-        <div class="bar-chart">
+        <div class="card-title" style="margin-bottom:4px;">Record vs. Each Umpire</div>
+        <div class="card-meta" style="margin-bottom:14px;">Challenges initiated by ${esc(shortName(playerFilter))}</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
           ${rows.map(([ump, s]) => {
-            const lastName = ump.split(' ').slice(-1)[0];
-            const ovPct = s.total ? Math.round(100 * s.ov / s.total) : 0;
-            const barW  = maxTotal ? Math.round((s.total / maxTotal) * 100) : 0;
-            return `<div class="bar-chart-row">
-              <div class="bar-chart-label" title="${esc(ump)}">${esc(lastName)}</div>
+            const ovPct  = s.total ? Math.round(100 * s.ov / s.total) : 0;
+            const color  = ovPct >= 60 ? 'var(--green)' : ovPct >= 40 ? 'var(--amber)' : 'var(--red)';
+            const cf     = s.total - s.ov;
+            return `
+            <div style="display:grid;grid-template-columns:1fr auto;align-items:start;gap:8px;">
               <div>
-                <div class="bar-chart-track">
-                  <div class="bar-chart-fill" style="width:${barW}%;background:${ovPct >= 50 ? 'var(--green)' : 'var(--red)'}"></div>
+                <div style="font-size:13px;font-weight:500;margin-bottom:5px;">${esc(ump)}</div>
+                <div style="background:var(--bg);border-radius:4px;height:8px;overflow:hidden;">
+                  <div style="height:100%;width:${ovPct}%;background:${color};border-radius:4px;transition:width .6s;"></div>
+                </div>
+                <div style="display:flex;gap:12px;margin-top:5px;font-size:11px;color:var(--muted);">
+                  <span style="color:var(--green);">✅ ${s.ov} overturned</span>
+                  <span style="color:var(--red);">❌ ${cf} confirmed</span>
                 </div>
               </div>
-              <div class="bar-chart-val">${s.ov}/${s.total}</div>
+              <div style="text-align:right;font-family:var(--mono);font-size:18px;font-weight:500;color:${color};line-height:1;padding-top:2px;">
+                ${ovPct}%
+              </div>
             </div>`;
           }).join('')}
         </div>
@@ -1188,6 +1219,168 @@ function h2hResults(playerFilter, umpireFilter) {
     <div style="display:flex;flex-direction:column;gap:6px;">${matchList}</div>
   `;
 }
+
+// ═══════════════════════════════════════════════════════════
+//  TEAM VS. UMPIRE TAB
+// ═══════════════════════════════════════════════════════════
+
+// Which umpire is selected for the team breakdown (null = show all teams)
+let teamUmpFilter = '';
+
+function renderTeamUmp() {
+  const el = $('cnt-teamump');
+  if (!DB.challenges.length) {
+    el.innerHTML = emptyHtml('🏟️', 'No data yet', 'Click Refresh Data first.');
+    return;
+  }
+
+  // ── 1. Overall team leaderboard ─────────────────────────────
+  const teamMap = {};
+  DB.challenges.forEach(c => {
+    // Determine the challenging team's abbreviation
+    // The challenger is on the batting team if role=Batter, fielding team otherwise
+    const team = c.role === 'Batter' ? c.away : c.home;
+    // Note: away bats in top half, home bats in bottom half — but we stored
+    // home/away on the challenge itself. Better: use challengeTeam derived from
+    // whether the challenger is the batter (away team in top, home in bottom).
+    // Simplification: use the team that benefits from the overturn.
+    // Ball called → fielding team challenges → that's the team NOT at bat
+    // Strike called → batting team challenges
+    const challengingTeam = (c.role === 'Batter')
+      ? (c.half === 'top' ? c.away : c.home)
+      : (c.half === 'top' ? c.home : c.away);
+
+    if (!teamMap[challengingTeam]) teamMap[challengingTeam] = { team: challengingTeam, total: 0, ov: 0 };
+    teamMap[challengingTeam].total++;
+    if (c.result === 'Overturned') teamMap[challengingTeam].ov++;
+  });
+
+  const teams = Object.values(teamMap)
+    .map(t => ({ ...t, rate: t.total ? t.ov / t.total : 0 }))
+    .sort((a, b) => b.ov - a.ov || b.rate - a.rate);
+
+  const leagueTotal = DB.challenges.length;
+  const leagueOv    = DB.challenges.filter(c => c.result === 'Overturned').length;
+  const leagueRate  = leagueTotal ? Math.round(100 * leagueOv / leagueTotal) : 0;
+
+  // ── 2. Build umpire selector ─────────────────────────────────
+  const umpireNames = [...new Set(DB.challenges.map(c => c.umpire))].filter(n => n && n !== 'Unknown').sort();
+
+  // ── 3. Umpire-filtered team breakdown ───────────────────────
+  let filteredChallenges = DB.challenges;
+  if (teamUmpFilter) {
+    filteredChallenges = DB.challenges.filter(c => c.umpire === teamUmpFilter);
+  }
+
+  const filteredTeamMap = {};
+  filteredChallenges.forEach(c => {
+    const challengingTeam = (c.role === 'Batter')
+      ? (c.half === 'top' ? c.away : c.home)
+      : (c.half === 'top' ? c.home : c.away);
+    if (!filteredTeamMap[challengingTeam]) filteredTeamMap[challengingTeam] = { team: challengingTeam, total: 0, ov: 0 };
+    filteredTeamMap[challengingTeam].total++;
+    if (c.result === 'Overturned') filteredTeamMap[challengingTeam].ov++;
+  });
+
+  const filteredTeams = Object.values(filteredTeamMap)
+    .map(t => ({ ...t, rate: t.total ? t.ov / t.total : 0 }))
+    .sort((a, b) => b.ov - a.ov || b.rate - a.rate);
+
+  el.innerHTML = `
+
+    <!-- League-wide summary -->
+    <div class="stats-grid" style="margin-bottom:24px;">
+      <div class="stat-card"><div class="big">${leagueTotal}</div><div class="lbl">Total Challenges</div></div>
+      <div class="stat-card"><div class="big" style="color:var(--green)">${leagueOv}</div><div class="lbl">Overturned</div></div>
+      <div class="stat-card"><div class="big">${leagueRate}%</div><div class="lbl">League Rate</div></div>
+      <div class="stat-card"><div class="big">${teams.length}</div><div class="lbl">Teams Active</div></div>
+    </div>
+
+    <!-- Season team leaderboard -->
+    <div class="sec-hd">
+      <span class="sec-ttl">SEASON TEAM LEADERBOARD</span>
+      <span class="sec-sub">Ranked by total overturns</span>
+    </div>
+    <div class="card" style="margin-bottom:24px;">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${teams.map((t, i) => {
+          const pct   = Math.round(t.rate * 100);
+          const color = pct >= 60 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)';
+          const rc    = i < 3 ? ['gold','silver','bronze'][i] : '';
+          const maxOv = teams[0]?.ov || 1;
+          const barW  = Math.round((t.ov / maxOv) * 100);
+          return `
+          <div style="display:grid;grid-template-columns:28px 52px 1fr 80px;align-items:center;gap:10px;">
+            <div class="lb-rank ${rc}" style="font-family:var(--display);font-size:16px;color:var(--muted);text-align:center;">${i+1}</div>
+            <div style="font-weight:600;font-size:14px;">${esc(t.team)}</div>
+            <div>
+              <div style="background:var(--bg);border-radius:4px;height:7px;overflow:hidden;">
+                <div style="height:100%;width:${barW}%;background:${color};border-radius:4px;transition:width .6s;"></div>
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-top:3px;">${t.ov} overturned / ${t.total} challenged</div>
+            </div>
+            <div style="text-align:right;font-family:var(--mono);font-size:16px;color:${color};font-weight:500;">${pct}%</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Umpire filter for team breakdown -->
+    <div class="sec-hd">
+      <span class="sec-ttl">TEAM RECORD VS. UMPIRE</span>
+      <span class="sec-sub">Filter by home plate umpire</span>
+    </div>
+    <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <select onchange="setTeamUmpFilter(this.value)"
+        style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 14px;color:var(--text);font-family:var(--sans);font-size:14px;outline:none;cursor:pointer;flex:1;min-width:200px;">
+        <option value="">— All umpires —</option>
+        ${umpireNames.map(u => `<option value="${esc(u)}" ${teamUmpFilter===u?'selected':''}>${esc(u)}</option>`).join('')}
+      </select>
+      ${teamUmpFilter ? `<button onclick="setTeamUmpFilter('')"
+        style="padding:9px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--muted);cursor:pointer;font-family:var(--sans);font-size:13px;">
+        Clear
+      </button>` : ''}
+    </div>
+
+    <!-- Filtered team breakdown -->
+    ${teamUmpFilter ? `
+    <div class="alert info" style="margin-bottom:14px;">
+      Showing team challenge results when <strong>${esc(teamUmpFilter)}</strong> is the home plate umpire
+    </div>` : ''}
+
+    <div class="card">
+      ${filteredTeams.length ? `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${filteredTeams.map((t, i) => {
+          const pct   = Math.round(t.rate * 100);
+          const color = pct >= 60 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : 'var(--red)';
+          const cf    = t.total - t.ov;
+          return `
+          <div style="display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:12px;">
+            <div style="font-weight:600;font-size:14px;">${esc(t.team)}</div>
+            <div>
+              <div style="background:var(--bg);border-radius:4px;height:7px;overflow:hidden;">
+                <div style="height:100%;width:${pct}%;background:${color};border-radius:4px;transition:width .6s;"></div>
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-top:3px;">
+                <span style="color:var(--green);">✅ ${t.ov}</span> &nbsp;
+                <span style="color:var(--red);">❌ ${cf}</span> &nbsp;
+                of ${t.total} challenges
+              </div>
+            </div>
+            <div style="font-family:var(--mono);font-size:16px;color:${color};font-weight:500;white-space:nowrap;">${pct}%</div>
+          </div>`;
+        }).join('')}
+      </div>` : `<div style="text-align:center;padding:20px;color:var(--muted);font-size:14px;">No challenges found for this umpire</div>`}
+    </div>
+  `;
+}
+
+function setTeamUmpFilter(val) {
+  teamUmpFilter = val;
+  renderTeamUmp();
+}
+
 </script>
 </body>
 </html>
