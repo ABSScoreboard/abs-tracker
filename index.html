@@ -189,50 +189,81 @@ async function loadAll() {
   btn.disabled = true; btn.classList.add('spin');
   setBtn('Loading…');
   allLoading();
-  prog(5, 'Fetching 2026 MLB schedule…');
+  prog(5, 'Probing Opening Night game to detect ABS structure…');
 
   try {
-    // 1. Get all game PKs for the season
-    const gamePks = await fetchAllGamePks();
-    prog(20, `Found ${gamePks.length} games — fetching ABS challenges…`);
+    // ── DIAGNOSTIC PROBE ──────────────────────────────────────
+    // Game 823243 = Yankees @ Giants Opening Night March 26 2026
+    // José Caballero made the FIRST ever ABS challenge in this game
+    // We probe this known game to see exactly how MLB tags challenges
+    const PROBE_PK = 823243;
+    prog(10, 'Fetching Opening Night game feed (Yankees @ Giants)…');
+    const probeData = await mlbGet(`${MLB2}/game/${PROBE_PK}/feed/live`);
+    const probePlays = probeData?.liveData?.plays?.allPlays || [];
 
-    if (!gamePks.length) throw new Error('No games found for this season/type.');
+    console.log(`=== DIAGNOSTIC: Game ${PROBE_PK} ===`);
+    console.log(`Total at-bats: ${probePlays.length}`);
 
-    // 2. For each game, fetch play-by-play and extract ABS events
-    // Process in parallel batches of 8 for speed
-    const challenges = [];
-    const gameInfoMap = {};
-    const BATCH = 8;
-    let done = 0;
+    // Log every unique event type seen in this game
+    const eventTypes = {};
+    const allEvents = probePlays.flatMap(p => p.playEvents || []);
+    allEvents.forEach(ev => {
+      eventTypes[ev.type] = (eventTypes[ev.type] || 0) + 1;
+    });
+    console.log('Event types in game:', JSON.stringify(eventTypes));
 
-    for (let i = 0; i < gamePks.length; i += BATCH) {
-      const batch = gamePks.slice(i, i+BATCH);
-      const results = await Promise.allSettled(batch.map(pk => fetchGameChallenges(pk)));
-      results.forEach((r, j) => {
-        if (r.status === 'fulfilled' && r.value) {
-          challenges.push(...r.value.challenges);
-          if (r.value.gameInfo) gameInfoMap[batch[j]] = r.value.gameInfo;
-        }
-      });
-      done += batch.length;
-      const pct = 20 + Math.round((done / gamePks.length) * 75);
-      prog(pct, `Processed ${done}/${gamePks.length} games…`);
-      await sleep(50); // breathe between batches
+    // Log any event where hasReview is true
+    const reviewPitches = allEvents.filter(ev => ev.details?.hasReview === true);
+    console.log(`Pitches with hasReview=true: ${reviewPitches.length}`);
+    if (reviewPitches.length > 0) {
+      console.log('First review pitch:', JSON.stringify(reviewPitches[0]).slice(0, 1000));
     }
 
-    prog(96, 'Building leaderboards…');
+    // Log any event of type 'review'
+    const reviewEvents = allEvents.filter(ev => ev.type === 'review');
+    console.log(`Events of type 'review': ${reviewEvents.length}`);
+    if (reviewEvents.length > 0) {
+      console.log('First review event:', JSON.stringify(reviewEvents[0]).slice(0, 1000));
+    }
 
-    // 3. Aggregate
-    const players = buildPlayerStats(challenges);
-    const umpires = buildUmpireStats(challenges);
+    // Log ALL events from the 4th inning (where Caballero challenged)
+    const inn4plays = probePlays.filter(p => p.about?.inning === 4);
+    console.log(`4th inning at-bats: ${inn4plays.length}`);
+    inn4plays.forEach((p, i) => {
+      const evts = p.playEvents || [];
+      evts.forEach(ev => {
+        console.log(`  Inn4 AB${i} event:`, JSON.stringify({
+          type: ev.type,
+          desc: ev.details?.description,
+          hasReview: ev.details?.hasReview,
+          reviewDetails: ev.reviewDetails,
+          callCode: ev.details?.call?.code,
+          isChallenge: ev.isChallenge,
+          challenge: ev.challenge,
+        }));
+      });
+    });
 
-    DB = { challenges, games: gameInfoMap, players, umpires };
-    lastUpdated = new Date();
-    prog(100, 'Done!');
+    // Also log the raw play-level data for inning 4 plays
+    inn4plays.forEach((p, i) => {
+      if (p.about) console.log(`  Inn4 AB${i} about:`, JSON.stringify(p.about));
+      if (p.result) console.log(`  Inn4 AB${i} result:`, JSON.stringify(p.result));
+    });
+
+    prog(100, 'Diagnostic complete — check Console for ABS data structure');
     await sleep(300);
     progOff();
+
+    // Show diagnostic results in the UI
+    $('cnt-scorecards').innerHTML = `
+      <div class="alert info">
+        🔬 <strong>Diagnostic mode:</strong> Check your browser Console (F12) for the ABS data structure from Opening Night.
+        Found ${reviewPitches.length} pitches with hasReview=true and ${reviewEvents.length} review-type events.
+        Event types seen: ${JSON.stringify(eventTypes)}
+      </div>`;
+
+    lastUpdated = new Date();
     updateStatus();
-    renderTab(activeTab);
 
   } catch(err) {
     console.error(err);
