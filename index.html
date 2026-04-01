@@ -87,6 +87,51 @@
   .spinner{width:18px;height:18px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:rot .7s linear infinite;}
   #toast{position:fixed;bottom:22px;right:22px;background:var(--green);color:#000;padding:9px 17px;border-radius:8px;font-weight:600;font-size:13px;opacity:0;transform:translateY(8px);transition:all .2s;pointer-events:none;z-index:999;}
   #toast.on{opacity:1;transform:translateY(0);}
+
+  /* H2H search */
+  .h2h-search{display:flex;gap:10px;margin-bottom:22px;flex-wrap:wrap;}
+  .h2h-search input{flex:1;min-width:200px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-family:var(--sans);font-size:14px;outline:none;transition:border-color .15s;}
+  .h2h-search input:focus{border-color:var(--green);}
+  .h2h-search input::placeholder{color:var(--muted);}
+  .h2h-search select{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-family:var(--sans);font-size:14px;outline:none;cursor:pointer;}
+  .h2h-dropdown{position:relative;}
+  .h2h-suggestions{position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--border);border-radius:8px;z-index:50;max-height:200px;overflow-y:auto;margin-top:4px;display:none;}
+  .h2h-suggestions.open{display:block;}
+  .h2h-suggestion{padding:10px 14px;cursor:pointer;font-size:14px;transition:background .1s;}
+  .h2h-suggestion:hover{background:var(--bg3);}
+  .h2h-suggestion small{color:var(--muted);font-size:11px;margin-left:6px;}
+
+  /* H2H results layout */
+  .h2h-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;}
+  @media(max-width:700px){.h2h-grid{grid-template-columns:1fr;}}
+  .h2h-stat-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);}
+  .h2h-stat-row:last-child{border-bottom:none;}
+  .h2h-label{font-size:13px;color:var(--muted);}
+  .h2h-value{font-family:var(--mono);font-size:14px;font-weight:500;}
+
+  /* Donut chart */
+  .donut-wrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px 0;}
+  .donut-legend{display:flex;gap:16px;font-size:12px;}
+  .donut-legend-item{display:flex;align-items:center;gap:6px;}
+  .donut-legend-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+
+  /* Bar chart */
+  .bar-chart{display:flex;flex-direction:column;gap:8px;padding:4px 0;}
+  .bar-chart-row{display:grid;grid-template-columns:100px 1fr 48px;align-items:center;gap:10px;}
+  .bar-chart-label{font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .bar-chart-track{height:8px;background:var(--bg);border-radius:4px;overflow:hidden;}
+  .bar-chart-fill{height:100%;border-radius:4px;transition:width .6s ease;}
+  .bar-chart-val{font-size:12px;font-family:var(--mono);color:var(--muted);}
+
+  /* Match list */
+  .h2h-match{display:flex;align-items:center;justify-content:space-between;padding:9px 13px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;font-size:13px;gap:8px;}
+  .h2h-match-left{display:flex;flex-direction:column;gap:2px;}
+  .h2h-match-game{font-size:11px;color:var(--muted);}
+  .h2h-match-detail{font-weight:500;}
+  .result-pill{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;}
+  .result-pill.ov{background:rgba(0,200,122,.15);color:var(--green);}
+  .result-pill.cf{background:rgba(255,77,77,.15);color:var(--red);}
+
   @media(max-width:600px){header{padding:10px 14px;height:auto;}.logo{font-size:20px;}main{padding:12px 12px;}.lb-row{grid-template-columns:28px 1fr 70px 56px;}}
 </style>
 </head>
@@ -120,6 +165,7 @@
     <button class="tab-btn" onclick="switchTab(this,'players')">🏆 Player Leaderboard</button>
     <button class="tab-btn" onclick="switchTab(this,'umpires')">🧑‍⚖️ Umpire Accuracy</button>
     <button class="tab-btn" onclick="switchTab(this,'weekly')">📅 Weekly Recap</button>
+    <button class="tab-btn" onclick="switchTab(this,'h2h')">⚔️ Player vs. Umpire</button>
   </div>
 
   <div class="tab-panel active" id="tab-scorecards">
@@ -137,6 +183,11 @@
   <div class="tab-panel" id="tab-weekly">
     <div class="sec-hd"><span class="sec-ttl">WEEKLY RECAP</span><span class="sec-sub">Last 7 days</span></div>
     <div id="cnt-weekly"><div class="empty"><div class="ico">📅</div><h3>No data yet</h3><p>Click Refresh Data</p></div></div>
+  </div>
+
+  <div class="tab-panel" id="tab-h2h">
+    <div class="sec-hd"><span class="sec-ttl">PLAYER VS. UMPIRE</span><span class="sec-sub">Head-to-head challenge history</span></div>
+    <div id="cnt-h2h"><div class="empty"><div class="ico">⚔️</div><h3>No data yet</h3><p>Click Refresh Data first, then search a player or umpire</p></div></div>
   </div>
 </main>
 <div id="toast">Copied!</div>
@@ -445,9 +496,23 @@ function gamesByDate() {
 // ═══════════════════════════════════════════════════════════
 const MED = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
 
-// Role emoji: batter = 🧢 (batting helmet), fielder = ⚾ (catcher's view)
-function roleEmoji(role) {
-  return role === 'Batter' ? '🧢' : '🥎';
+// Role tag: always text labels, no emoji
+// Role is 'Batter', 'Fielder' (catcher), or 'Pitcher'
+function roleTag(role) {
+  if (role === 'Batter')  return '(H)';  // Hitter
+  if (role === 'Pitcher') return '(P)';  // Pitcher
+  return '(C)';                           // Catcher (default Fielder)
+}
+
+// Format player name as "F. Last" to guarantee fit within 280 chars
+// e.g. "Eugenio Suarez" → "E. Suarez"
+function shortName(fullName) {
+  if (!fullName || fullName === '?') return '?';
+  const parts = fullName.trim().split(' ');
+  if (parts.length === 1) return parts[0];
+  const first  = parts[0];
+  const last   = parts.slice(1).join(' ');  // handles "de la Cruz" etc.
+  return `${first[0]}. ${last}`;
 }
 
 function scorecardTweet(game) {
@@ -455,36 +520,50 @@ function scorecardTweet(game) {
   const ov  = game.list.filter(c => c.result === 'Overturned').length;
   const pct = tot ? Math.round(100 * ov / tot) : 0;
 
-  // Header line
-  const lines = [
+  // Umpire last name only in header to save space
+  const umpLast = game.umpire !== 'Unknown'
+    ? game.umpire.split(' ').slice(-1)[0]
+    : 'Unknown';
+
+  // Header — fixed format, always fits
+  const header = [
     `⚾ ${game.away} @ ${game.home} | ${fmtDate(game.date)}`,
-    `Ump: ${game.umpire} | ${ov}/${tot} overturned (${pct}%)`,
+    `Ump: ${umpLast} | ${ov}/${tot} overturned (${pct}%)`,
     '',
   ];
 
-  // Challenge lines — keep names short to stay under 280
-  // Format: ✅🧢 Suarez (Inn 3, 1-2) or ❌🥎 Alvarez (Inn 6, 3-1)
-  for (const c of game.list.slice(0, 7)) {
+  // Each challenge line uses "F. Last" format + role tag
+  // e.g.  ✅ (H) E. Suarez — Inn 3 (1-2)
+  //        ❌ (C) F. Alvarez — Inn 6 (3-1)
+  const challengeLines = game.list.map(c => {
     const res  = c.result === 'Overturned' ? '✅' : '❌';
-    const role = roleEmoji(c.role);
-    // Use last name only to save chars
-    const lastName = c.challenger.split(' ').slice(-1)[0];
-    lines.push(`${res}${role} ${lastName} — Inn ${c.inning} (${c.balls}-${c.strikes})`);
+    const tag  = roleTag(c.role);
+    const name = shortName(c.challenger);
+    return `${res} ${tag} ${name} — Inn ${c.inning} (${c.balls}-${c.strikes})`;
+  });
+
+  // Fit as many challenge lines as possible within 280 chars
+  const footer = ['', '#MLB #ABSChallenge'];
+  const base   = [...header, ...footer].join('\n');
+  let included = [];
+  for (const line of challengeLines) {
+    const candidate = [...header, ...included, line, ...footer].join('\n');
+    if (candidate.length <= 280) included.push(line);
+    else break;
   }
-  if (game.list.length > 7) lines.push(`+${game.list.length - 7} more challenges`);
+  const skipped = challengeLines.length - included.length;
+  if (skipped > 0) included.push(`+${skipped} more`);
 
-  lines.push('', '#MLB #ABSChallenge');
-
-  // Trim to 280
-  return trimTo280(lines.join('\n'));
+  return [...header, ...included, ...footer].join('\n');
 }
 
 function playerTweet(top) {
   const lbl  = season === 'S' ? 'Spring Training' : '2026 Season';
   const lines = [`🏆 Top ABS Challengers — ${lbl}`, ''];
   top.forEach((p, i) => {
-    const lastName = p.name.split(' ').slice(-1)[0];
-    lines.push(`${MED[i] || `${i+1}.`} ${roleEmoji(p.role)} ${lastName}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
+    // Full "F. Last" name so readers know who it is
+    const name = shortName(p.name);
+    lines.push(`${MED[i] || `${i+1}.`} ${roleTag(p.role)} ${name}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
   });
   lines.push('', '(min. 2 challenges) #MLB #ABSChallenge');
   return trimTo280(lines.join('\n'));
@@ -494,8 +573,9 @@ function umpireTweet(umps) {
   const lbl  = season === 'S' ? 'Spring Training' : '2026 Season';
   const lines = [`🧑‍⚖️ Umpire ABS Accuracy — ${lbl}`, '(% of calls overturned)', ''];
   umps.slice(0, 10).forEach((u, i) => {
-    const lastName = u.name.split(' ').slice(-1)[0];
-    lines.push(`${MED[i] || `${i+1}.`} ${lastName}  ${Math.round(u.rate*100)}% (${u.ov}/${u.total})`);
+    // Use "F. Last" format for umpires too — consistent and readable
+    const name = shortName(u.name);
+    lines.push(`${MED[i] || `${i+1}.`} ${name}  ${Math.round(u.rate*100)}% (${u.ov}/${u.total})`);
   });
   lines.push('', '(min. 3 challenges) #MLB #ABSChallenge');
   return trimTo280(lines.join('\n'));
@@ -504,24 +584,26 @@ function umpireTweet(umps) {
 function weeklyTweet(top, since) {
   const lines = [`⚾ Best ABS Challengers This Week`, `${fmtDate(since)} → Today`, ''];
   top.forEach((p, i) => {
-    const lastName = p.name.split(' ').slice(-1)[0];
-    lines.push(`${MED[i] || `${i+1}.`} ${roleEmoji(p.role)} ${lastName}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
+    const name = shortName(p.name);
+    lines.push(`${MED[i] || `${i+1}.`} ${roleTag(p.role)} ${name}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`);
   });
   lines.push('', '#MLB #ABSChallenge');
   return trimTo280(lines.join('\n'));
 }
 
 function highlightTweet(c) {
-  const res      = c.result === 'Overturned' ? '✅ Overturned' : '❌ Confirmed';
-  const lastName = c.challenger.split(' ').slice(-1)[0];
-  const umpLast  = c.umpire !== 'Unknown' ? c.umpire.split(' ').slice(-1)[0] : 'Unknown';
+  const res  = c.result === 'Overturned' ? '✅ Overturned' : '❌ Confirmed';
+  const name = shortName(c.challenger);
+  const tag  = roleTag(c.role);
+  // Use full umpire name — it fits and adds accountability
+  const ump  = c.umpire !== 'Unknown' ? c.umpire : 'Unknown';
   const lines = [
     `⚾ ABS Highlight of the Week`,
     '',
-    `${c.result === 'Overturned' ? '✅' : '❌'} ${roleEmoji(c.role)} ${c.challenger}`,
+    `${c.result === 'Overturned' ? '✅' : '❌'} ${tag} ${name}`,
     `${c.away} @ ${c.home} · ${fmtDate(c.game_date)}`,
     `Inn ${c.inning} · ${c.balls}-${c.strikes} count · ${res}`,
-    `Umpire: ${c.umpire}`,
+    `Ump: ${ump}`,
     '',
     '#MLB #ABSChallenge',
   ];
@@ -551,6 +633,7 @@ function renderTab(tab) {
   else if (tab === 'players') renderPlayers();
   else if (tab === 'umpires') renderUmpires();
   else if (tab === 'weekly') renderWeekly();
+  else if (tab === 'h2h') renderH2H();
 }
 
 function renderScorecards() {
@@ -791,6 +874,319 @@ function setSeason(s) {
 
 function setBtn(lbl) {
   $('refresh-btn').innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> ${lbl}`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  PLAYER vs. UMPIRE HEAD-TO-HEAD TAB
+// ═══════════════════════════════════════════════════════════
+
+// State for H2H search
+let h2hPlayerFilter = '';
+let h2hUmpireFilter = '';
+
+function renderH2H() {
+  const el = $('cnt-h2h');
+  if (!DB.challenges.length) {
+    el.innerHTML = emptyHtml('⚔️', 'No data yet', 'Click Refresh Data first, then search below.');
+    return;
+  }
+
+  // Build unique player and umpire lists from data
+  const playerNames = [...new Set(DB.challenges.map(c => c.challenger))].filter(n => n && n !== '?').sort();
+  const umpireNames = [...new Set(DB.challenges.map(c => c.umpire))].filter(n => n && n !== 'Unknown').sort();
+
+  el.innerHTML = `
+    <!-- Search controls -->
+    <div class="h2h-search">
+      <div class="h2h-dropdown" style="flex:1;min-width:200px;">
+        <input id="h2h-player-input" placeholder="Search player name…"
+          oninput="h2hFilterSuggest('player')" onfocus="h2hFilterSuggest('player')"
+          onblur="setTimeout(()=>h2hCloseSuggest('player'),200)"
+          value="${esc(h2hPlayerFilter)}" autocomplete="off">
+        <div class="h2h-suggestions" id="h2h-player-suggestions"></div>
+      </div>
+      <div style="display:flex;align-items:center;font-size:13px;color:var(--muted);font-weight:600;">VS</div>
+      <div class="h2h-dropdown" style="flex:1;min-width:200px;">
+        <input id="h2h-umpire-input" placeholder="Search umpire name…"
+          oninput="h2hFilterSuggest('umpire')" onfocus="h2hFilterSuggest('umpire')"
+          onblur="setTimeout(()=>h2hCloseSuggest('umpire'),200)"
+          value="${esc(h2hUmpireFilter)}" autocomplete="off">
+        <div class="h2h-suggestions" id="h2h-umpire-suggestions"></div>
+      </div>
+      <button onclick="h2hClear()" style="padding:10px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--muted);cursor:pointer;font-family:var(--sans);font-size:13px;white-space:nowrap;">Clear</button>
+    </div>
+
+    <!-- Results area -->
+    <div id="h2h-results">${h2hResults(h2hPlayerFilter, h2hUmpireFilter)}</div>
+  `;
+
+  // Populate suggestions
+  window._h2hPlayers = playerNames;
+  window._h2hUmpires = umpireNames;
+}
+
+function h2hFilterSuggest(type) {
+  const input = $(`h2h-${type}-input`);
+  const box   = $(`h2h-${type}-suggestions`);
+  const query = input.value.toLowerCase().trim();
+  const list  = type === 'player' ? window._h2hPlayers : window._h2hUmpires;
+
+  const matches = list.filter(n => n.toLowerCase().includes(query)).slice(0, 8);
+
+  if (!matches.length) { box.classList.remove('open'); return; }
+
+  box.innerHTML = matches.map(n => {
+    // Show role badge for players
+    let badge = '';
+    if (type === 'player') {
+      const roles = [...new Set(DB.challenges.filter(c => c.challenger === n).map(c => c.role))];
+      badge = roles.map(r => roleTag(r)).join(' ');
+    }
+    return `<div class="h2h-suggestion" onmousedown="h2hSelect('${type}','${n.replace(/'/g,"\'")}')">
+      ${esc(n)} <small>${badge}</small>
+    </div>`;
+  }).join('');
+  box.classList.add('open');
+}
+
+function h2hCloseSuggest(type) {
+  $(`h2h-${type}-suggestions`).classList.remove('open');
+}
+
+function h2hSelect(type, name) {
+  if (type === 'player') {
+    h2hPlayerFilter = name;
+  } else {
+    h2hUmpireFilter = name;
+  }
+  $(`h2h-results`).innerHTML = h2hResults(h2hPlayerFilter, h2hUmpireFilter);
+  $(`h2h-${type}-input`).value = name;
+  h2hCloseSuggest(type);
+}
+
+function h2hClear() {
+  h2hPlayerFilter = '';
+  h2hUmpireFilter = '';
+  renderH2H();
+}
+
+function h2hResults(playerFilter, umpireFilter) {
+  // Filter challenges to match search
+  let filtered = DB.challenges;
+  if (playerFilter) filtered = filtered.filter(c => c.challenger === playerFilter);
+  if (umpireFilter) filtered = filtered.filter(c => c.umpire === umpireFilter);
+
+  if (!playerFilter && !umpireFilter) {
+    return `<div class="empty" style="padding:30px 0">
+      <div class="ico">🔍</div>
+      <h3>Search above to explore</h3>
+      <p>Type a player name to see their challenge history against all umpires,<br>
+      or an umpire name to see how all players have fared against them.<br>
+      Search both to see a specific head-to-head matchup.</p>
+    </div>`;
+  }
+
+  if (!filtered.length) {
+    return `<div class="empty" style="padding:30px 0">
+      <div class="ico">⚾</div>
+      <h3>No matchups found</h3>
+      <p>No ABS challenges match this combination yet this season.</p>
+    </div>`;
+  }
+
+  const tot = filtered.length;
+  const ov  = filtered.filter(c => c.result === 'Overturned').length;
+  const cf  = tot - ov;
+  const pct = tot ? Math.round(100 * ov / tot) : 0;
+
+  // ── Summary cards ─────────────────────────────────────────────
+  const summaryCards = `
+    <div class="stats-grid" style="margin-bottom:24px;">
+      <div class="stat-card"><div class="big">${tot}</div><div class="lbl">Challenges</div></div>
+      <div class="stat-card"><div class="big" style="color:var(--green)">${ov}</div><div class="lbl">Overturned</div></div>
+      <div class="stat-card"><div class="big" style="color:var(--red)">${cf}</div><div class="lbl">Confirmed</div></div>
+      <div class="stat-card"><div class="big">${pct}%</div><div class="lbl">Success Rate</div></div>
+    </div>`;
+
+  // ── Donut chart (SVG) ──────────────────────────────────────────
+  const r   = 54;
+  const cx  = 70;
+  const cy  = 70;
+  const circ = 2 * Math.PI * r;
+  const ovArc = tot ? (ov / tot) * circ : 0;
+  const cfArc = circ - ovArc;
+  // Overturned arc (green), starts at top (-PI/2)
+  const ovDash  = `${ovArc.toFixed(1)} ${circ.toFixed(1)}`;
+  const cfDash  = `${cfArc.toFixed(1)} ${circ.toFixed(1)}`;
+  const cfOffset = -ovArc;
+
+  const donut = `
+    <div class="card">
+      <div class="card-title" style="margin-bottom:14px;">Result Breakdown</div>
+      <div class="donut-wrap">
+        <svg width="140" height="140" viewBox="0 0 140 140">
+          <!-- Background ring -->
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="18"/>
+          ${tot > 0 ? `
+          <!-- Confirmed arc (red) — draw full circle first -->
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#FF4D4D" stroke-width="18"
+            stroke-dasharray="${circ.toFixed(1)} ${circ.toFixed(1)}"
+            stroke-linecap="butt"
+            transform="rotate(-90 ${cx} ${cy})"/>
+          <!-- Overturned arc (green) — overlaid on top -->
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#00C87A" stroke-width="18"
+            stroke-dasharray="${ovDash}"
+            stroke-linecap="butt"
+            transform="rotate(-90 ${cx} ${cy})"/>
+          ` : ''}
+          <!-- Center text -->
+          <text x="${cx}" y="${cy - 6}" text-anchor="middle" fill="var(--text)"
+            font-family="'Bebas Neue',sans-serif" font-size="22">${pct}%</text>
+          <text x="${cx}" y="${cy + 12}" text-anchor="middle" fill="var(--muted)"
+            font-family="'DM Sans',sans-serif" font-size="11">success</text>
+        </svg>
+        <div class="donut-legend">
+          <div class="donut-legend-item">
+            <div class="donut-legend-dot" style="background:var(--green)"></div>
+            <span style="font-size:12px">Overturned (${ov})</span>
+          </div>
+          <div class="donut-legend-item">
+            <div class="donut-legend-dot" style="background:var(--red)"></div>
+            <span style="font-size:12px">Confirmed (${cf})</span>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  // ── Bar chart: breakdown by umpire OR by player ────────────────
+  // If player selected → show by umpire; if umpire selected → show by player
+  // If both selected → show by inning
+  let barChartHtml = '';
+
+  if (playerFilter && !umpireFilter) {
+    // Challenges per umpire
+    const byUmp = {};
+    filtered.forEach(c => {
+      if (!byUmp[c.umpire]) byUmp[c.umpire] = { total: 0, ov: 0 };
+      byUmp[c.umpire].total++;
+      if (c.result === 'Overturned') byUmp[c.umpire].ov++;
+    });
+    const rows = Object.entries(byUmp).sort((a, b) => b[1].total - a[1].total).slice(0, 8);
+    const maxTotal = Math.max(...rows.map(r => r[1].total));
+
+    barChartHtml = `
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Challenges by Umpire</div>
+        <div class="bar-chart">
+          ${rows.map(([ump, s]) => {
+            const lastName = ump.split(' ').slice(-1)[0];
+            const ovPct = s.total ? Math.round(100 * s.ov / s.total) : 0;
+            const barW  = maxTotal ? Math.round((s.total / maxTotal) * 100) : 0;
+            return `<div class="bar-chart-row">
+              <div class="bar-chart-label" title="${esc(ump)}">${esc(lastName)}</div>
+              <div>
+                <div class="bar-chart-track">
+                  <div class="bar-chart-fill" style="width:${barW}%;background:${ovPct >= 50 ? 'var(--green)' : 'var(--red)'}"></div>
+                </div>
+              </div>
+              <div class="bar-chart-val">${s.ov}/${s.total}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+
+  } else if (!playerFilter && umpireFilter) {
+    // Challenges per player against this umpire
+    const byPlayer = {};
+    filtered.forEach(c => {
+      if (!byPlayer[c.challenger]) byPlayer[c.challenger] = { total: 0, ov: 0, role: c.role };
+      byPlayer[c.challenger].total++;
+      if (c.result === 'Overturned') byPlayer[c.challenger].ov++;
+    });
+    const rows = Object.entries(byPlayer).sort((a, b) => b[1].total - a[1].total).slice(0, 8);
+    const maxTotal = Math.max(...rows.map(r => r[1].total));
+
+    barChartHtml = `
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Challenges vs. ${esc(umpireFilter)}</div>
+        <div class="bar-chart">
+          ${rows.map(([player, s]) => {
+            const sName = shortName(player);
+            const ovPct = s.total ? Math.round(100 * s.ov / s.total) : 0;
+            const barW  = maxTotal ? Math.round((s.total / maxTotal) * 100) : 0;
+            return `<div class="bar-chart-row">
+              <div class="bar-chart-label" title="${esc(player)}">${esc(sName)}</div>
+              <div>
+                <div class="bar-chart-track">
+                  <div class="bar-chart-fill" style="width:${barW}%;background:${ovPct >= 50 ? 'var(--green)' : 'var(--red)'}"></div>
+                </div>
+              </div>
+              <div class="bar-chart-val">${s.ov}/${s.total}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+
+  } else if (playerFilter && umpireFilter) {
+    // Both selected — show breakdown by inning
+    const byInning = {};
+    filtered.forEach(c => {
+      const k = `Inn ${c.inning}`;
+      if (!byInning[k]) byInning[k] = { total: 0, ov: 0 };
+      byInning[k].total++;
+      if (c.result === 'Overturned') byInning[k].ov++;
+    });
+    const rows = Object.entries(byInning).sort((a, b) => {
+      return parseInt(a[0].replace('Inn ','')) - parseInt(b[0].replace('Inn ',''));
+    });
+    const maxTotal = Math.max(...rows.map(r => r[1].total), 1);
+
+    barChartHtml = rows.length > 1 ? `
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Challenges by Inning</div>
+        <div class="bar-chart">
+          ${rows.map(([inning, s]) => {
+            const ovPct = s.total ? Math.round(100 * s.ov / s.total) : 0;
+            const barW  = Math.round((s.total / maxTotal) * 100);
+            return `<div class="bar-chart-row">
+              <div class="bar-chart-label">${esc(inning)}</div>
+              <div>
+                <div class="bar-chart-track">
+                  <div class="bar-chart-fill" style="width:${barW}%;background:${ovPct >= 50 ? 'var(--green)' : 'var(--red)'}"></div>
+                </div>
+              </div>
+              <div class="bar-chart-val">${s.ov}/${s.total}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+  }
+
+  // ── Individual challenge log ───────────────────────────────────
+  const matchList = filtered.slice().reverse().map(c => {
+    const pill   = c.result === 'Overturned'
+      ? `<span class="result-pill ov">✅ Overturned</span>`
+      : `<span class="result-pill cf">❌ Confirmed</span>`;
+    const pName  = playerFilter ? shortName(c.umpire) : shortName(c.challenger);
+    const pLabel = playerFilter ? `vs. ${pName}` : `${roleTag(c.role)} ${pName}`;
+    return `<div class="h2h-match">
+      <div class="h2h-match-left">
+        <div class="h2h-match-detail">${esc(pLabel)} — Inn ${c.inning} (${c.balls}-${c.strikes})</div>
+        <div class="h2h-match-game">${c.away} @ ${c.home} · ${fmtDate(c.game_date)}</div>
+      </div>
+      ${pill}
+    </div>`;
+  }).join('');
+
+  return `
+    ${summaryCards}
+    <div class="h2h-grid">
+      ${donut}
+      ${barChartHtml}
+    </div>
+    <div class="sec-hd"><span class="sec-ttl">CHALLENGE LOG</span><span class="sec-sub">Most recent first</span></div>
+    <div style="display:flex;flex-direction:column;gap:6px;">${matchList}</div>
+  `;
 }
 </script>
 </body>
