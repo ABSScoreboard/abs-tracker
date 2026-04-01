@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -313,17 +312,33 @@ function extractChallenges(data, gamePk, gameInfo) {
       if (ev.type === 'pitch') totalPitches++;
       if (!isABSEvent(ev)) continue;
 
-      const rev = ev.reviewDetails || {};
-      const result = rev.isChallenge
-        ? (rev.challengeDecision === 'overturned' ? 'Overturned' : 'Confirmed')
-        : getResultFromDesc(ev.details?.description || '');
-
+      // For 'review' type events, the data is directly on the event
+      // For 'pitch' type events with hasReview, reviewDetails is nested
+      const rev = ev.reviewDetails || ev || {};
+      
+      // Determine result
+      let result = 'Unknown';
+      if (rev.isChallenge || ev.type === 'review') {
+        const decision = rev.challengeDecision || rev.decision || '';
+        result = decision.toLowerCase() === 'overturned' ? 'Overturned' : 'Confirmed';
+      } else {
+        result = getResultFromDesc(ev.details?.description || '');
+      }
       if (result === 'Unknown') continue;
 
       const matchup = play.matchup || {};
+      // For review events, count comes from the preceding pitch or the event itself
       const evCount = ev.count || {};
       const callCode = ev.details?.call?.code || '';
-      const role = determineRole(callCode, ev.details?.description || '');
+      const desc = ev.details?.description || ev.description || '';
+      const role = determineRole(callCode, desc);
+      
+      // Challenger name: review events often have this directly
+      const challengerName = rev.challenger?.fullName 
+        || ev.challenger?.fullName
+        || (role === 'Batter' ? matchup.batter?.fullName : matchup.pitcher?.fullName)
+        || matchup.batter?.fullName 
+        || '?';
 
       found.push({
         game_pk:   gamePk,
@@ -339,33 +354,40 @@ function extractChallenges(data, gamePk, gameInfo) {
         batter:    matchup.batter?.fullName || '?',
         pitcher:   matchup.pitcher?.fullName || '?',
         role,
-        challenger: rev.challenger?.fullName || matchup.batter?.fullName || '?',
+        challenger: challengerName,
         result,
-        desc:      ev.details?.description || '',
-        we:        0,
+        desc,
+        we: 0,
       });
     }
   }
 
-  // Log a sample pitch from games with 0 ABS found so we can tune detection
-  if (totalPitches > 0 && found.length === 0) {
+  // Log first game's review events so we can see the exact structure
+  const reviewEvents = plays.flatMap(p=>p.playEvents||[]).filter(e=>e.type==='review');
+  if (reviewEvents.length > 0) {
+    console.log(`Game ${gamePk}: Found ${reviewEvents.length} review events:`, JSON.stringify(reviewEvents[0]).slice(0,800));
+  } else if (totalPitches > 0 && found.length === 0 && gamePk < 823300) {
+    // Log sample from early games only to avoid spam
     const sample = plays.flatMap(p=>p.playEvents||[]).find(e=>e.type==='pitch');
-    if (sample) console.log(`Game ${gamePk} sample pitch (${totalPitches} pitches, 0 ABS):`, JSON.stringify(sample).slice(0,600));
+    if (sample) console.log(`Game ${gamePk} (${totalPitches} pitches, no review events). Sample:`, JSON.stringify(sample).slice(0,400));
   }
   return found;
 }
 
 // ABS event detection — MLB GUMBO uses several different patterns
 function isABSEvent(ev) {
-  // Must be a pitch event
-  if (ev.type !== 'pitch') return false;
-  const desc = (ev.details?.description || '').toLowerCase();
-  // hasReview on the pitch details signals a challenge occurred
-  if (ev.details?.hasReview === true) return true;
-  // reviewDetails block being present signals a challenge
-  if (ev.reviewDetails && Object.keys(ev.reviewDetails).length > 0) return true;
-  // Fall back to description text matching
-  return ABS_DESC_TERMS.some(t => desc.includes(t));
+  // MLB GUMBO stores ABS challenges as type='review' events inside playEvents
+  if (ev.type === 'review') return true;
+  // Some pitches have hasReview flagged directly on them
+  if (ev.type === 'pitch' && ev.details?.hasReview === true) return true;
+  // reviewDetails block present on a pitch
+  if (ev.type === 'pitch' && ev.reviewDetails && Object.keys(ev.reviewDetails).length > 0) return true;
+  // Fallback: description text matching on pitch events
+  if (ev.type === 'pitch') {
+    const desc = (ev.details?.description || '').toLowerCase();
+    return ABS_DESC_TERMS.some(t => desc.includes(t));
+  }
+  return false;
 }
 
 function getResultFromDesc(desc) {
