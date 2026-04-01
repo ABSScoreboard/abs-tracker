@@ -132,6 +132,21 @@
   .result-pill.ov{background:rgba(0,200,122,.15);color:var(--green);}
   .result-pill.cf{background:rgba(255,77,77,.15);color:var(--red);}
 
+  /* Tweet Studio */
+  .studio-section{margin-bottom:32px;}
+  .studio-section-hd{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+  .studio-section-icon{font-size:20px;}
+  .studio-section-title{font-family:var(--display);font-size:17px;letter-spacing:1px;}
+  .studio-section-sub{font-size:12px;color:var(--muted);}
+  .studio-cards{display:flex;flex-direction:column;gap:12px;}
+  .studio-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;}
+  .studio-card-label{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:6px;}
+  .studio-card-label-dot{width:6px;height:6px;border-radius:50%;}
+  .studio-hook{font-size:14px;color:var(--text);font-weight:500;margin-bottom:10px;line-height:1.5;padding:10px 12px;background:var(--bg3);border-left:3px solid var(--green);border-radius:0 6px 6px 0;}
+  .studio-why{font-size:12px;color:var(--muted);margin-bottom:10px;font-style:italic;}
+  .fire-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(255,77,77,.12);color:var(--red);border-radius:20px;font-size:11px;font-weight:600;margin-left:auto;}
+  .hot-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(245,166,35,.12);color:var(--amber);border-radius:20px;font-size:11px;font-weight:600;margin-left:auto;}
+
   @media(max-width:600px){header{padding:10px 14px;height:auto;}.logo{font-size:20px;}main{padding:12px 12px;}.lb-row{grid-template-columns:28px 1fr 70px 56px;}}
 </style>
 </head>
@@ -167,6 +182,7 @@
     <button class="tab-btn" onclick="switchTab(this,'weekly')">📅 Weekly Recap</button>
     <button class="tab-btn" onclick="switchTab(this,'h2h')">⚔️ Player vs. Umpire</button>
     <button class="tab-btn" onclick="switchTab(this,'teamump')">🏟️ Team vs. Umpire</button>
+    <button class="tab-btn" onclick="switchTab(this,'studio')">✏️ Tweet Studio</button>
   </div>
 
   <div class="tab-panel active" id="tab-scorecards">
@@ -189,6 +205,11 @@
   <div class="tab-panel" id="tab-h2h">
     <div class="sec-hd"><span class="sec-ttl">PLAYER VS. UMPIRE</span><span class="sec-sub">Head-to-head challenge history</span></div>
     <div id="cnt-h2h"><div class="empty"><div class="ico">⚔️</div><h3>No data yet</h3><p>Click Refresh Data first, then search a player or umpire</p></div></div>
+  </div>
+
+  <div class="tab-panel" id="tab-studio">
+    <div class="sec-hd"><span class="sec-ttl">TWEET STUDIO</span><span class="sec-sub">Ready-to-post · auto-generated from latest data</span></div>
+    <div id="cnt-studio"><div class="empty"><div class="ico">✏️</div><h3>No data yet</h3><p>Click Refresh Data first</p></div></div>
   </div>
 
   <div class="tab-panel" id="tab-teamump">
@@ -345,22 +366,30 @@ async function fetchGameChallenges(gamePk) {
       // Determine if batter or fielder (catcher/pitcher) challenged
       // Call code 'C' = called strike → batter challenges
       // Call code 'B' = ball → fielder (catcher) challenges
-      // Determine role by matching challenger name against batter/pitcher
-      // This is more reliable than using call codes alone.
-      // rev.player.fullName is the person who tapped their helmet.
+      // BULLETPROOF ROLE LOGIC
+      // The call code is the definitive source of truth — it never lies.
+      // 'C' (Called Strike) = the batter challenged. Always. No exceptions.
+      // 'B' (Called Ball)   = a fielder challenged (catcher or pitcher).
+      //
+      // For called balls: check if the challenger is the pitcher.
+      // We use last-name comparison to handle display name mismatches
+      // (e.g. "Brent Rooker" vs "B. Rooker" or accent differences).
       const callCode = ev.details?.call?.code || '';
       let role;
-      if (challenger === batter) {
-        role = 'Batter';
-      } else if (challenger === pitcher) {
-        role = 'Pitcher';
-      } else if (callCode === 'C') {
-        // Called strike → batter challenged (even if name didn't match exactly)
+
+      if (callCode === 'C') {
+        // Called strike → always the batter at the plate
         role = 'Batter';
       } else {
-        // Ball called → fielder challenged. Default to Catcher since
-        // catchers initiate ~95% of fielder challenges.
-        role = 'Catcher';
+        // Called ball → fielder challenged
+        // Check if challenger is the pitcher using last-name fuzzy match
+        const challLast   = challenger.split(' ').slice(-1)[0].toLowerCase();
+        const pitcherLast = pitcher.split(' ').slice(-1)[0].toLowerCase();
+        if (challLast && pitcherLast && challLast === pitcherLast) {
+          role = 'Pitcher';
+        } else {
+          role = 'Catcher'; // default — catchers do ~95% of fielder challenges
+        }
       }
 
       const count = ev.count || {};
@@ -655,6 +684,7 @@ function renderTab(tab) {
   else if (tab === 'weekly') renderWeekly();
   else if (tab === 'h2h') renderH2H();
   else if (tab === 'teamump') renderTeamUmp();
+  else if (tab === 'studio') renderStudio();
 }
 
 function renderScorecards() {
@@ -1379,6 +1409,466 @@ function renderTeamUmp() {
 function setTeamUmpFilter(val) {
   teamUmpFilter = val;
   renderTeamUmp();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  TWEET STUDIO
+//  Surfaces the most interesting data-driven storylines
+//  automatically from the current dataset.
+// ═══════════════════════════════════════════════════════════
+
+function renderStudio() {
+  const el = $('cnt-studio');
+  if (!DB.challenges.length) {
+    el.innerHTML = emptyHtml('✏️', 'No data yet', 'Click Refresh Data first.');
+    return;
+  }
+
+  const sections = [
+    buildDailyScorecardsSection(),
+    buildLeaderboardSection(),
+    buildUmpireSection(),
+    buildWeeklyRecapSection(),
+    buildHotTakeSection(),
+    buildMilestoneSection(),
+  ].filter(Boolean);
+
+  el.innerHTML = sections.join('');
+}
+
+// ── HELPERS ────────────────────────────────────────────────
+
+// Build one studio card with a tweet draft + hook + context
+function studioCard(labelColor, labelText, hookLine, whyLine, tweetText, badge) {
+  const n = tweetText.length;
+  const cls = n > 280 ? 'over' : '';
+  const badgeHtml = badge || '';
+  return `
+  <div class="studio-card">
+    <div class="studio-card-label">
+      <div class="studio-card-label-dot" style="background:${labelColor}"></div>
+      ${labelText}
+      ${badgeHtml}
+    </div>
+    <div class="studio-hook">${esc(hookLine)}</div>
+    <div class="studio-why">${esc(whyLine)}</div>
+    <div class="tweet-box">${esc(tweetText)}</div>
+    <div class="tweet-acts">
+      <span class="char-ct ${cls}">${n} / 280 chars</span>
+      <button class="copy-btn" onclick="cp(this,${JSON.stringify(tweetText)})">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        Copy tweet
+      </button>
+    </div>
+  </div>`;
+}
+
+function sectionWrap(icon, title, sub, cardsHtml) {
+  return `<div class="studio-section">
+    <div class="studio-section-hd">
+      <span class="studio-section-icon">${icon}</span>
+      <div>
+        <div class="studio-section-title">${title}</div>
+        <div class="studio-section-sub">${sub}</div>
+      </div>
+    </div>
+    <div class="studio-cards">${cardsHtml}</div>
+  </div>`;
+}
+
+// ── SECTION 1: DAILY GAME SCORECARDS ───────────────────────
+// Surfaces the 2 most interesting games from the last 2 days:
+// highest overturn rate + most challenges (volume)
+function buildDailyScorecardsSection() {
+  const byGame = {};
+  DB.challenges.forEach(c => {
+    if (!byGame[c.game_pk]) byGame[c.game_pk] = {
+      game_pk: c.game_pk, date: c.game_date,
+      home: c.home, away: c.away, umpire: c.umpire, list: []
+    };
+    byGame[c.game_pk].list.push(c);
+  });
+
+  const games = Object.values(byGame)
+    .map(g => ({
+      ...g,
+      tot: g.list.length,
+      ov:  g.list.filter(c => c.result === 'Overturned').length,
+      rate: g.list.length ? g.list.filter(c => c.result === 'Overturned').length / g.list.length : 0,
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  // Most recent date with data
+  const latestDate = games[0]?.date;
+  if (!latestDate) return null;
+  const recentGames = games.filter(g => g.date === latestDate);
+
+  // Pick: highest overturn rate (min 2 challenges) + highest volume
+  const byRate   = [...recentGames].filter(g => g.tot >= 2).sort((a, b) => b.rate - a.rate)[0];
+  const byVolume = [...recentGames].sort((a, b) => b.tot - a.tot)[0];
+
+  const cards = [];
+
+  if (byRate) {
+    const pct = Math.round(byRate.rate * 100);
+    const hook = pct >= 70
+      ? `${byRate.umpire !== 'Unknown' ? byRate.umpire : 'The home plate umpire'} had a nightmare night — ${pct}% of their calls were overturned.`
+      : `${byRate.away} @ ${byRate.home}: ${byRate.ov} of ${byRate.tot} ABS challenges overturned (${pct}%).`;
+    const why = pct >= 70
+      ? '🔥 High overturn rate — umpire accountability post performs well'
+      : 'Standard game recap with solid data';
+    const badge = pct >= 70 ? `<span class="fire-badge">🔥 High impact</span>` : '';
+    cards.push(studioCard('#FF4D4D', 'Game scorecard · Highest overturn rate', hook, why, scorecardTweet(byRate), badge));
+  }
+
+  // Only add volume card if it's a different game
+  if (byVolume && (!byRate || byVolume.game_pk !== byRate.game_pk)) {
+    const hook = `${byVolume.away} @ ${byVolume.home} saw the most ABS action last night — ${byVolume.tot} challenges in one game.`;
+    const why = 'High challenge volume = more story to tell, more engagement potential';
+    cards.push(studioCard('#5BA8FF', 'Game scorecard · Most challenges', hook, why, scorecardTweet(byVolume), ''));
+  }
+
+  if (!cards.length) return null;
+  return sectionWrap('📋', 'LAST NIGHT'S GAMES', fmtDate(latestDate), cards.join(''));
+}
+
+// ── SECTION 2: LEADERBOARD TWEETS ──────────────────────────
+// Season top-10 + a "rising player" who's been hot recently
+function buildLeaderboardSection() {
+  const qualified = DB.players.filter(p => p.total >= 3);
+  if (!qualified.length) return null;
+
+  const top10 = qualified.slice(0, 10);
+  const cards = [];
+
+  // Season leaderboard tweet
+  const leaderTweet = playerTweet(top10);
+  const leader = qualified[0];
+  const hook = `${leader.name} is the best ABS challenger in baseball right now — ${leader.ov}/${leader.total} (${Math.round(leader.rate*100)}%).`;
+  cards.push(studioCard('#00C87A', 'Season leaderboard', hook,
+    'Leaderboard tweets get consistent engagement — post weekly on Mondays',
+    leaderTweet, ''));
+
+  // "Most overturns" tweet (raw volume, not rate)
+  const byVolume = [...qualified].sort((a, b) => b.ov - a.ov)[0];
+  if (byVolume && byVolume.name !== leader.name) {
+    const volTweet = trimTo280([
+      `⚾ Most ABS overturns this season:`,
+      ``,
+      ...qualified.slice(0,8).sort((a,b)=>b.ov-a.ov).map((p,i) =>
+        `${MED[i]||`${i+1}.`} ${roleTag(p.role)} ${shortName(p.name)}  ${p.ov} overturned`),
+      ``,
+      `#MLB #ABSChallenge`
+    ].join('
+'));
+    cards.push(studioCard('#00C87A', 'Volume leaderboard · Raw overturns',
+      `${byVolume.name} leads MLB with ${byVolume.ov} total ABS overturns this season.`,
+      'Raw volume (not rate) resonates with casual fans who don't follow the percentages',
+      volTweet, ''));
+  }
+
+  // Catchers specifically — they're the most successful challengers
+  const catchers = qualified.filter(p => p.role === 'Catcher').slice(0, 5);
+  if (catchers.length >= 3) {
+    const catchTweet = trimTo280([
+      `🥎 Best catcher ABS challengers — 2026:`,
+      ``,
+      ...catchers.map((p,i) =>
+        `${MED[i]||`${i+1}.`} (C) ${shortName(p.name)}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`),
+      ``,
+      `Catchers are winning ${Math.round(catchers.reduce((s,p)=>s+p.ov,0)/catchers.reduce((s,p)=>s+p.total,0)*100)}% of their challenges league-wide`,
+      `#MLB #ABSChallenge`
+    ].join('
+'));
+    cards.push(studioCard('#00C87A', 'Position spotlight · Catchers',
+      `Catchers are dominating ABS challenges — here's the leaderboard.`,
+      'Position-specific leaderboards drive engagement from fans of those teams',
+      catchTweet, ''));
+  }
+
+  return sectionWrap('🏆', 'PLAYER LEADERBOARDS', 'Season rankings · updated daily', cards.join(''));
+}
+
+// ── SECTION 3: UMPIRE CALLOUTS ──────────────────────────────
+// Most overturned umpire + a "trending bad night" callout
+function buildUmpireSection() {
+  const qualified = DB.umpires.filter(u => u.total >= 5);
+  if (!qualified.length) return null;
+
+  const cards = [];
+  const worst = qualified[0]; // sorted by overturn rate desc
+  const mostChallenged = [...qualified].sort((a,b) => b.total - a.total)[0];
+
+  // Season worst umpire
+  const worstTweet = umpireTweet(qualified);
+  cards.push(studioCard('#FF4D4D', 'Umpire accuracy · Season rankings',
+    `${worst.name} is getting overturned on ${Math.round(worst.rate*100)}% of challenged calls — the most in MLB.`,
+    '🔥 Umpire accountability content = high engagement. Tag @UmpScorecards for reach.',
+    worstTweet,
+    `<span class="fire-badge">🔥 Tag @UmpScorecards</span>`));
+
+  // Most challenged umpire
+  if (mostChallenged.name !== worst.name) {
+    const challTweet = trimTo280([
+      `🧑‍⚖️ Most challenged umpire in MLB this season:`,
+      ``,
+      `${mostChallenged.name}`,
+      `${mostChallenged.total} ABS challenges faced`,
+      `${mostChallenged.ov} overturned (${Math.round(mostChallenged.rate*100)}%)`,
+      ``,
+      `Players clearly don't trust this zone.`,
+      ``,
+      `#MLB #ABSChallenge #Umpires`
+    ].join('
+'));
+    cards.push(studioCard('#FF4D4D', 'Umpire spotlight · Most challenged',
+      `${mostChallenged.name} has been challenged more than any other umpire this season.`,
+      'Volume = story. "Players don't trust this umpire" is a compelling angle.',
+      challTweet, ''));
+  }
+
+  // Umpire accuracy ranking top 5 (best accuracy = fewest overturns)
+  const bestUmps = [...qualified].sort((a,b) => a.rate - b.rate).slice(0, 5);
+  if (bestUmps.length >= 3) {
+    const bestTweet = trimTo280([
+      `🧑‍⚖️ Most accurate umpires in MLB — 2026:`,
+      `(lowest ABS overturn rate, min. 5 challenges)`,
+      ``,
+      ...bestUmps.map((u,i) =>
+        `${MED[i]||`${i+1}.`} ${shortName(u.name)}  ${Math.round(u.rate*100)}% overturned (${u.ov}/${u.total})`),
+      ``,
+      `#MLB #ABSChallenge #Umpires`
+    ].join('
+'));
+    cards.push(studioCard('#5BA8FF', 'Umpire spotlight · Most accurate',
+      `Not all umpires are getting torched — here are the ones holding up best under ABS scrutiny.`,
+      'Balanced content. Praising good umpires makes the callouts more credible.',
+      bestTweet, ''));
+  }
+
+  return sectionWrap('🧑‍⚖️', 'UMPIRE CONTENT', 'Accountability + accuracy', cards.join(''));
+}
+
+// ── SECTION 4: WEEKLY RECAP ─────────────────────────────────
+function buildWeeklyRecapSection() {
+  const cut = new Date(); cut.setDate(cut.getDate() - 7);
+  const cutStr = cut.toISOString().split('T')[0];
+  const week = DB.challenges.filter(c => c.game_date >= cutStr);
+  if (week.length < 5) return null;
+
+  const wmap = {};
+  week.forEach(c => {
+    if (!wmap[c.challenger]) wmap[c.challenger] = { name:c.challenger, role:c.role, total:0, ov:0 };
+    wmap[c.challenger].total++;
+    if (c.result === 'Overturned') wmap[c.challenger].ov++;
+  });
+  const topW = Object.values(wmap).filter(p=>p.total>=2)
+    .map(p=>({...p,rate:p.ov/p.total}))
+    .sort((a,b)=>b.rate-a.rate||b.ov-a.ov).slice(0,5);
+
+  if (!topW.length) return null;
+
+  const tot = week.length;
+  const ov  = week.filter(c=>c.result==='Overturned').length;
+  const pct = Math.round(100*ov/tot);
+
+  const weekTweet = trimTo280([
+    `⚾ ABS Challenge Week in Review`,
+    ``,
+    `📊 ${tot} challenges · ${ov} overturned (${pct}%)`,
+    ``,
+    `Top challengers this week:`,
+    ...topW.map((p,i) =>
+      `${MED[i]||`${i+1}.`} ${roleTag(p.role)} ${shortName(p.name)}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`),
+    ``,
+    `#MLB #ABSChallenge`
+  ].join('
+'));
+
+  const cards = [studioCard('#F5A623', 'Weekly recap',
+    `${topW[0].name} was the best ABS challenger this week — ${topW[0].ov}/${topW[0].total} overturned.`,
+    '📅 Post every Monday. Weekly recaps get bookmarked and shared.',
+    weekTweet, `<span class="hot-badge">📅 Post Mondays</span>`)];
+
+  return sectionWrap('📅', 'WEEKLY RECAP', 'Last 7 days · post on Mondays', cards.join(''));
+}
+
+// ── SECTION 5: HOT TAKES ────────────────────────────────────
+// Data-backed opinion tweets — the ones that go viral
+function buildHotTakeSection() {
+  const qualified = DB.players.filter(p => p.total >= 3);
+  const qualUmps  = DB.umpires.filter(u => u.total >= 5);
+  if (!qualified.length) return null;
+
+  const cards = [];
+  const tot   = DB.challenges.length;
+  const ov    = DB.challenges.filter(c=>c.result==='Overturned').length;
+  const pct   = tot ? Math.round(100*ov/tot) : 0;
+
+  // Hot take 1: Overall overturn rate context
+  const overallTweet = trimTo280([
+    `Real talk: MLB umpires are wrong on ${pct}% of challenged calls this season.`,
+    ``,
+    `That's ${ov} out of ${tot} ABS challenges overturned.`,
+    ``,
+    `And remember — players are only challenging the most obvious misses.`,
+    `The actual error rate is higher.`,
+    ``,
+    `#MLB #ABSChallenge #RoboUmp`
+  ].join('
+'));
+  cards.push(studioCard('#FF4D4D', 'Hot take · Overall error rate',
+    'Put the league-wide overturn rate in context — this is your most shareable stat.',
+    '🔥 This angle gets QTs from people who want to defend umpires AND people who agree. Both = reach.',
+    overallTweet, `<span class="fire-badge">🔥 High viral potential</span>`));
+
+  // Hot take 2: Best challenger is basically a cheat code
+  const best = qualified[0];
+  if (best && best.rate >= 0.7) {
+    const cheatTweet = trimTo280([
+      `${best.name} is basically cheating the ABS system.`,
+      ``,
+      `${best.ov}/${best.total} challenges overturned (${Math.round(best.rate*100)}%).`,
+      ``,
+      `At this point just let them call their own strikes.`,
+      ``,
+      `#MLB #ABSChallenge`
+    ].join('
+'));
+    cards.push(studioCard('#FF4D4D', 'Hot take · Elite challenger',
+      `${best.name} at ${Math.round(best.rate*100)}% is a genuinely ridiculous ABS challenge number.`,
+      '🔥 "Basically cheating" framing = quote tweets. The player's fans will engage.',
+      cheatTweet, `<span class="fire-badge">🔥 Tag the player</span>`));
+  }
+
+  // Hot take 3: Worst umpire
+  if (qualUmps.length) {
+    const worstUmp = qualUmps[0];
+    const wpct = Math.round(worstUmp.rate * 100);
+    if (wpct >= 60) {
+      const umpTweet = trimTo280([
+        `${worstUmp.name} has had ${worstUmp.ov} of their calls overturned by ABS this season.`,
+        ``,
+        `That's a ${wpct}% overturn rate.`,
+        ``,
+        `At what point does this affect job security?`,
+        ``,
+        `#MLB #ABSChallenge #Umpires`
+      ].join('
+'));
+      cards.push(studioCard('#FF4D4D', 'Hot take · Umpire accountability',
+        `${worstUmp.name} at ${wpct}% is a genuinely alarming number for a major league umpire.`,
+        '🔥 Accountability content — tag @UmpScorecards to amplify.',
+        umpTweet, `<span class="fire-badge">🔥 Tag @UmpScorecards</span>`));
+    }
+  }
+
+  // Hot take 4: Pitchers are bad at challenging
+  const pitchers = qualified.filter(p => p.role === 'Pitcher');
+  if (pitchers.length >= 3) {
+    const avgPRate = Math.round(pitchers.reduce((s,p)=>s+p.rate,0)/pitchers.length*100);
+    const pTweet = trimTo280([
+      `Pitchers keep ignoring the data.`,
+      ``,
+      `Pitchers' ABS challenge success rate: ${avgPRate}%`,
+      `Catchers' ABS challenge success rate: ${Math.round(DB.players.filter(p=>p.role==='Catcher'&&p.total>=2).reduce((s,p)=>s+p.rate,0)/Math.max(1,DB.players.filter(p=>p.role==='Catcher'&&p.total>=2).length)*100)}%`,
+      ``,
+      `Let the catcher handle it.`,
+      ``,
+      `#MLB #ABSChallenge`
+    ].join('
+'));
+    cards.push(studioCard('#F5A623', 'Hot take · Pitchers vs catchers',
+      `Pitchers consistently underperform catchers on ABS challenges — the data proves it.`,
+      'Strategy content — teams, coaches, and baseball nerds will engage with this.',
+      pTweet, ''));
+  }
+
+  return sectionWrap('🔥', 'HOT TAKES', 'Data-backed opinions · high engagement potential', cards.join(''));
+}
+
+// ── SECTION 6: MILESTONES ───────────────────────────────────
+// Auto-detect when a player/umpire hits a notable threshold
+function buildMilestoneSection() {
+  const cards = [];
+  const qualified = DB.players.filter(p => p.total >= 2);
+  const qualUmps  = DB.umpires.filter(u => u.total >= 3);
+
+  // Player milestones: first to 5, 10, 15 overturns
+  const milestones = [15, 10, 5];
+  for (const threshold of milestones) {
+    const reached = qualified.filter(p => p.ov >= threshold).sort((a,b)=>b.ov-a.ov);
+    if (reached.length > 0) {
+      const leader = reached[0];
+      const mTweet = trimTo280([
+        `⚾ ${leader.name} has reached ${leader.ov} ABS overturns this season.`,
+        ``,
+        `${leader.total} challenges · ${Math.round(leader.rate*100)}% success rate`,
+        ``,
+        `The best ABS eye in baseball right now.`,
+        ``,
+        `#MLB #ABSChallenge`
+      ].join('
+'));
+      cards.push(studioCard('#00C87A', `Milestone · ${leader.ov} overturns`,
+        `${leader.name} leads MLB with ${leader.ov} ABS overturns — a notable milestone.`,
+        'Milestone posts feel timely and specific — they perform well when posted promptly.',
+        mTweet, `<span class="hot-badge">⭐ Milestone post</span>`));
+      break; // just show the highest milestone reached
+    }
+  }
+
+  // Umpire milestone: most overturned
+  if (qualUmps.length) {
+    const mostOv = [...qualUmps].sort((a,b)=>b.ov-a.ov)[0];
+    if (mostOv.ov >= 10) {
+      const uTweet = trimTo280([
+        `⚾ ${mostOv.name} has had ${mostOv.ov} calls overturned by ABS this season.`,
+        ``,
+        `More than any other umpire in baseball.`,
+        ``,
+        `${mostOv.total} challenges faced · ${Math.round(mostOv.rate*100)}% overturned`,
+        ``,
+        `#MLB #ABSChallenge #Umpires`
+      ].join('
+'));
+      cards.push(studioCard('#FF4D4D', `Milestone · ${mostOv.ov} overturns against`,
+        `${mostOv.name} leads all umpires with ${mostOv.ov} overturned calls — a notable milestone.`,
+        'Umpire milestone posts attract engagement from the umpire's critics and defenders.',
+        uTweet, `<span class="hot-badge">⭐ Milestone post</span>`));
+    }
+  }
+
+  // Team milestone: most overturns
+  const teamMap = {};
+  DB.challenges.forEach(c => {
+    const team = c.role === 'Batter'
+      ? (c.half === 'top' ? c.away : c.home)
+      : (c.half === 'top' ? c.home : c.away);
+    if (!teamMap[team]) teamMap[team] = { team, total:0, ov:0 };
+    teamMap[team].total++;
+    if (c.result === 'Overturned') teamMap[team].ov++;
+  });
+  const topTeam = Object.values(teamMap).sort((a,b)=>b.ov-a.ov)[0];
+  if (topTeam && topTeam.ov >= 10) {
+    const tTweet = trimTo280([
+      `⚾ The ${topTeam.team} lead MLB with ${topTeam.ov} ABS overturns this season.`,
+      ``,
+      `${topTeam.total} challenges · ${Math.round(topTeam.ov/topTeam.total*100)}% success rate`,
+      ``,
+      `Best at working the system in baseball.`,
+      ``,
+      `#MLB #ABSChallenge #${topTeam.team}`
+    ].join('
+'));
+    cards.push(studioCard('#5BA8FF', `Team milestone · ${topTeam.team} leads MLB`,
+      `The ${topTeam.team} are the best ABS challenging team in baseball this season.`,
+      `Team-specific content drives engagement from that team's fanbase — tag their official account.`,
+      tTweet, `<span class="hot-badge">⭐ Tag the team</span>`));
+  }
+
+  if (!cards.length) return null;
+  return sectionWrap('⭐', 'MILESTONES', 'Notable thresholds worth posting about', cards.join(''));
 }
 
 </script>
