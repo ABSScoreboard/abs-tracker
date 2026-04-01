@@ -1524,12 +1524,12 @@ function buildDailyScorecardsSection() {
   // Only add volume card if it's a different game
   if (byVolume && (!byRate || byVolume.game_pk !== byRate.game_pk)) {
     const hook = `${byVolume.away} @ ${byVolume.home} saw the most ABS action last night — ${byVolume.tot} challenges in one game.`;
-    const why = 'High challenge volume = more story to tell, more engagement potential';
+    const why = "High challenge volume = more story to tell, more engagement potential";
     cards.push(studioCard('#5BA8FF', 'Game scorecard · Most challenges', hook, why, scorecardTweet(byVolume), ''));
   }
 
   if (!cards.length) return null;
-  return sectionWrap('📋', 'LAST NIGHT'S GAMES', fmtDate(latestDate), cards.join(''));
+  return sectionWrap('📋', 'LAST NIGHTS GAMES', fmtDate(latestDate), cards.join(''));
 }
 
 // ── SECTION 2: LEADERBOARD TWEETS ──────────────────────────
@@ -1546,7 +1546,7 @@ function buildLeaderboardSection() {
   const leader = qualified[0];
   const hook = `${leader.name} is the best ABS challenger in baseball right now — ${leader.ov}/${leader.total} (${Math.round(leader.rate*100)}%).`;
   cards.push(studioCard('#00C87A', 'Season leaderboard', hook,
-    'Leaderboard tweets get consistent engagement — post weekly on Mondays',
+    "Leaderboard tweets get consistent engagement — post weekly on Mondays",
     leaderTweet, ''));
 
   // "Most overturns" tweet (raw volume, not rate)
@@ -1559,11 +1559,10 @@ function buildLeaderboardSection() {
         `${MED[i]||`${i+1}.`} ${roleTag(p.role)} ${shortName(p.name)}  ${p.ov} overturned`),
       ``,
       `#MLB #ABSChallenge`
-    ].join('
-'));
+    ].join('\n'));
     cards.push(studioCard('#00C87A', 'Volume leaderboard · Raw overturns',
       `${byVolume.name} leads MLB with ${byVolume.ov} total ABS overturns this season.`,
-      'Raw volume (not rate) resonates with casual fans who don't follow the percentages',
+      "Raw volume (not rate) resonates with casual fans who don't follow the percentages",
       volTweet, ''));
   }
 
@@ -1578,11 +1577,10 @@ function buildLeaderboardSection() {
       ``,
       `Catchers are winning ${Math.round(catchers.reduce((s,p)=>s+p.ov,0)/catchers.reduce((s,p)=>s+p.total,0)*100)}% of their challenges league-wide`,
       `#MLB #ABSChallenge`
-    ].join('
-'));
+    ].join('\n'));
     cards.push(studioCard('#00C87A', 'Position spotlight · Catchers',
       `Catchers are dominating ABS challenges — here's the leaderboard.`,
-      'Position-specific leaderboards drive engagement from fans of those teams',
+      "Position-specific leaderboards drive engagement from fans of those teams",
       catchTweet, ''));
   }
 
@@ -1603,7 +1601,7 @@ function buildUmpireSection() {
   const worstTweet = umpireTweet(qualified);
   cards.push(studioCard('#FF4D4D', 'Umpire accuracy · Season rankings',
     `${worst.name} is getting overturned on ${Math.round(worst.rate*100)}% of challenged calls — the most in MLB.`,
-    '🔥 Umpire accountability content = high engagement. Tag @UmpScorecards for reach.',
+    "🔥 Umpire accountability content = high engagement. Tag @UmpScorecards for reach.",
     worstTweet,
     `<span class="fire-badge">🔥 Tag @UmpScorecards</span>`));
 
@@ -1619,11 +1617,10 @@ function buildUmpireSection() {
       `Players clearly don't trust this zone.`,
       ``,
       `#MLB #ABSChallenge #Umpires`
-    ].join('
-'));
+    ].join('\n'));
     cards.push(studioCard('#FF4D4D', 'Umpire spotlight · Most challenged',
       `${mostChallenged.name} has been challenged more than any other umpire this season.`,
-      'Volume = story. "Players don't trust this umpire" is a compelling angle.',
+      "Volume = story. Players don't trust this umpire is a compelling angle.",
       challTweet, ''));
   }
 
@@ -1638,11 +1635,10 @@ function buildUmpireSection() {
         `${MED[i]||`${i+1}.`} ${shortName(u.name)}  ${Math.round(u.rate*100)}% overturned (${u.ov}/${u.total})`),
       ``,
       `#MLB #ABSChallenge #Umpires`
-    ].join('
-'));
+    ].join('\n'));
     cards.push(studioCard('#5BA8FF', 'Umpire spotlight · Most accurate',
       `Not all umpires are getting torched — here are the ones holding up best under ABS scrutiny.`,
-      'Balanced content. Praising good umpires makes the callouts more credible.',
+      "Balanced content. Praising good umpires makes the callouts more credible.",
       bestTweet, ''));
   }
 
@@ -1682,8 +1678,7 @@ function buildWeeklyRecapSection() {
       `${MED[i]||`${i+1}.`} ${roleTag(p.role)} ${shortName(p.name)}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`),
     ``,
     `#MLB #ABSChallenge`
-  ].join('
-'));
+  ].join('\n'));
 
   const cards = [studioCard('#F5A623', 'Weekly recap',
     `${topW[0].name} was the best ABS challenger this week — ${topW[0].ov}/${topW[0].total} overturned.`,
@@ -1715,11 +1710,10 @@ function buildHotTakeSection() {
     `The actual error rate is higher.`,
     ``,
     `#MLB #ABSChallenge #RoboUmp`
-  ].join('
-'));
+  ].join('\n'));
   cards.push(studioCard('#FF4D4D', 'Hot take · Overall error rate',
     'Put the league-wide overturn rate in context — this is your most shareable stat.',
-    '🔥 This angle gets QTs from people who want to defend umpires AND people who agree. Both = reach.',
+    "🔥 This angle gets QTs from people who want to defend umpires AND people who agree. Both = reach.",
     overallTweet, `<span class="fire-badge">🔥 High viral potential</span>`));
 
   // Hot take 2: Best challenger is basically a cheat code
@@ -1733,11 +1727,10 @@ function buildHotTakeSection() {
       `At this point just let them call their own strikes.`,
       ``,
       `#MLB #ABSChallenge`
-    ].join('
-'));
+    ].join('\n'));
     cards.push(studioCard('#FF4D4D', 'Hot take · Elite challenger',
       `${best.name} at ${Math.round(best.rate*100)}% is a genuinely ridiculous ABS challenge number.`,
-      '🔥 "Basically cheating" framing = quote tweets. The player's fans will engage.',
+      "🔥 \"Basically cheating\" framing = quote tweets. The player's fans will engage.",
       cheatTweet, `<span class="fire-badge">🔥 Tag the player</span>`));
   }
 
@@ -1754,8 +1747,7 @@ function buildHotTakeSection() {
         `At what point does this affect job security?`,
         ``,
         `#MLB #ABSChallenge #Umpires`
-      ].join('
-'));
+      ].join('\n'));
       cards.push(studioCard('#FF4D4D', 'Hot take · Umpire accountability',
         `${worstUmp.name} at ${wpct}% is a genuinely alarming number for a major league umpire.`,
         '🔥 Accountability content — tag @UmpScorecards to amplify.',
@@ -1776,11 +1768,10 @@ function buildHotTakeSection() {
       `Let the catcher handle it.`,
       ``,
       `#MLB #ABSChallenge`
-    ].join('
-'));
+    ].join('\n'));
     cards.push(studioCard('#F5A623', 'Hot take · Pitchers vs catchers',
       `Pitchers consistently underperform catchers on ABS challenges — the data proves it.`,
-      'Strategy content — teams, coaches, and baseball nerds will engage with this.',
+      "Strategy content — teams, coaches, and baseball nerds will engage with this.",
       pTweet, ''));
   }
 
@@ -1808,11 +1799,10 @@ function buildMilestoneSection() {
         `The best ABS eye in baseball right now.`,
         ``,
         `#MLB #ABSChallenge`
-      ].join('
-'));
+      ].join('\n'));
       cards.push(studioCard('#00C87A', `Milestone · ${leader.ov} overturns`,
         `${leader.name} leads MLB with ${leader.ov} ABS overturns — a notable milestone.`,
-        'Milestone posts feel timely and specific — they perform well when posted promptly.',
+        "Milestone posts feel timely and specific — they perform well when posted promptly.",
         mTweet, `<span class="hot-badge">⭐ Milestone post</span>`));
       break; // just show the highest milestone reached
     }
@@ -1830,11 +1820,10 @@ function buildMilestoneSection() {
         `${mostOv.total} challenges faced · ${Math.round(mostOv.rate*100)}% overturned`,
         ``,
         `#MLB #ABSChallenge #Umpires`
-      ].join('
-'));
+      ].join('\n'));
       cards.push(studioCard('#FF4D4D', `Milestone · ${mostOv.ov} overturns against`,
         `${mostOv.name} leads all umpires with ${mostOv.ov} overturned calls — a notable milestone.`,
-        'Umpire milestone posts attract engagement from the umpire's critics and defenders.',
+        "Umpire milestone posts attract engagement from the umpire's critics and defenders.",
         uTweet, `<span class="hot-badge">⭐ Milestone post</span>`));
     }
   }
@@ -1859,11 +1848,10 @@ function buildMilestoneSection() {
       `Best at working the system in baseball.`,
       ``,
       `#MLB #ABSChallenge #${topTeam.team}`
-    ].join('
-'));
+    ].join('\n'));
     cards.push(studioCard('#5BA8FF', `Team milestone · ${topTeam.team} leads MLB`,
       `The ${topTeam.team} are the best ABS challenging team in baseball this season.`,
-      `Team-specific content drives engagement from that team's fanbase — tag their official account.`,
+      "Team-specific content drives engagement from that team's fanbase — tag their official account.",
       tTweet, `<span class="hot-badge">⭐ Tag the team</span>`));
   }
 
