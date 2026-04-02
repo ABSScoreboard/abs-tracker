@@ -410,6 +410,36 @@ async function fetchGameChallenges(gamePk) {
   const plays = data?.liveData?.plays?.allPlays || [];
   const challenges = [];
 
+  // DEEP DIAGNOSTIC: log full event structure for MIN@KC April 1
+  const isDiagGame = (away === 'MIN' && home === 'KC') || (away === 'KC' && home === 'MIN');
+  if (isDiagGame) {
+    console.log(`
+====== DEEP DIAGNOSTIC: ${away}@${home} (${date}) gamePk=${gamePk} ======`);
+    console.log(`Total plays: ${plays.length}`);
+    plays.forEach((play, pi) => {
+      (play.playEvents || []).forEach((ev, ei) => {
+        // Log EVERYTHING that has any review-related field
+        const hasR = ev.details?.hasReview;
+        const revD = ev.reviewDetails || {};
+        const revKeys = Object.keys(revD);
+        const desc = ev.details?.description || '';
+        const code = ev.details?.call?.code || '';
+        if (hasR !== undefined || revKeys.length > 0 ||
+            desc.toLowerCase().includes('challenge') ||
+            desc.toLowerCase().includes('review') ||
+            desc.toLowerCase().includes('overturn') ||
+            desc.toLowerCase().includes('confirmed')) {
+          console.log(`  [play${pi} ev${ei}] type=${ev.type} hasReview=${hasR} code=${code}`);
+          console.log(`    desc: "${desc}"`);
+          console.log(`    revKeys: [${revKeys.join(', ')}]`);
+          if (revKeys.length > 0) console.log(`    revDetails:`, JSON.stringify(revD));
+        }
+      });
+    });
+    console.log(`====== END DIAGNOSTIC ======
+`);
+  }
+
   for (const play of plays) {
     const matchup   = play.matchup || {};
     const batter    = matchup.batter?.fullName   || '?';
@@ -1974,73 +2004,5 @@ function buildMilestoneSection() {
 }
 
 </script>
-
-<script>
-// ═══════════════════════════════════════════════════
-// DIAGNOSTIC — auto-runs on page load
-// Fetches MIN@KC April 1 and logs every event structure
-// ═══════════════════════════════════════════════════
-async function runDiagnostic() {
-  console.log('=== DIAGNOSTIC START ===');
-  try {
-    // Step 1: Get the gamePk
-    const schedResp = await fetch('https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=2026-04-01&endDate=2026-04-01&gameType=R');
-    const schedData = await schedResp.json();
-    const games = schedData.dates?.[0]?.games || [];
-    const minKC = games.find(g =>
-      g.teams.away.team.abbreviation === 'MIN' &&
-      g.teams.home.team.abbreviation === 'KC'
-    );
-    if (!minKC) { console.log('MIN@KC not found'); return; }
-    console.log('MIN@KC gamePk:', minKC.gamePk, 'status:', minKC.status.abstractGameState, minKC.status.abstractGameCode);
-
-    // Step 2: Fetch full game feed
-    const feedResp = await fetch(`https://statsapi.mlb.com/api/v1.1/game/${minKC.gamePk}/feed/live`);
-    const feedData = await feedResp.json();
-    const plays = feedData.liveData?.plays?.allPlays || [];
-    console.log('Total plays:', plays.length);
-
-    // Step 3: Log EVERY event that could be a challenge
-    let found = 0;
-    plays.forEach((play, pi) => {
-      (play.playEvents || []).forEach((ev, ei) => {
-        const hasR  = ev.details?.hasReview;
-        const revD  = ev.reviewDetails || {};
-        const desc  = (ev.details?.description || '').toLowerCase();
-        const code  = ev.details?.call?.code || '';
-        const isInteresting =
-          hasR === true ||
-          hasR === false && Object.keys(revD).length > 0 ||
-          desc.includes('challenge') ||
-          desc.includes('overturn') ||
-          desc.includes('confirmed') ||
-          desc.includes('review') ||
-          code === 'C' || code === 'B';
-
-        if (isInteresting) {
-          found++;
-          console.log(
-            `[${found}] Inn:${play.about?.inning} ${play.about?.halfInning}`,
-            `| play:${pi} ev:${ei}`,
-            `| type:${ev.type}`,
-            `| hasReview:${hasR}`,
-            `| code:${code}`,
-            `| desc:"${ev.details?.description}"`,
-            `| revKeys:${Object.keys(revD).join(',')}`,
-            `| isOverturned:${revD.isOverturned}`,
-            `| player:${revD.player?.fullName}`,
-            `| reviewType:${revD.reviewType}`
-          );
-        }
-      });
-    });
-    console.log('=== Total interesting events:', found, '===');
-  } catch(e) {
-    console.error('Diagnostic error:', e);
-  }
-}
-window.addEventListener('load', runDiagnostic);
-</script>
-
 </body>
 </html>
