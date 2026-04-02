@@ -250,6 +250,11 @@ function yesterday() {
   return d.toISOString().split('T')[0];
 }
 
+// Today's date as YYYY-MM-DD
+function todayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+
 function monthChunks(start, end) {
   const chunks = [];
   let cur = new Date(start + 'T12:00:00Z');
@@ -273,7 +278,8 @@ function monthChunks(start, end) {
 async function fetchScheduleAndUmpires() {
   const gameType  = season === 'S' ? 'S' : 'R';
   const startDate = season === 'S' ? SEASON_START_S : SEASON_START_R;
-  const endDate   = season === 'S' ? SEASON_END_S   : yesterday();
+  // Use today (not yesterday) so games that finish tonight are included immediately
+  const endDate   = season === 'S' ? SEASON_END_S   : todayStr();
 
   console.log(`Schedule: ${startDate} → ${endDate} (${gameType})`);
 
@@ -288,7 +294,10 @@ async function fetchScheduleAndUmpires() {
 
       for (const dateObj of (data.dates || [])) {
         for (const game of (dateObj.games || [])) {
-          if (game.status?.abstractGameState !== 'Final') continue;
+          // Accept 'Final' and 'Game Over' — West Coast games sometimes
+          // briefly show 'Game Over' before transitioning to 'Final'
+          const gameState = game.status?.abstractGameState;
+          if (gameState !== 'Final' && gameState !== 'Game Over') continue;
           pks.push(game.gamePk);
           nFinal++;
 
@@ -342,9 +351,11 @@ async function fetchGameChallenges(gamePk) {
   const challenges = [];
 
   for (const play of plays) {
-    const matchup = play.matchup || {};
-    const batter  = matchup.batter?.fullName  || '?';
-    const pitcher = matchup.pitcher?.fullName || '?';
+    const matchup   = play.matchup || {};
+    const batter    = matchup.batter?.fullName   || '?';
+    const pitcher   = matchup.pitcher?.fullName  || '?';
+    const batterId  = matchup.batter?.id;
+    const pitcherId = matchup.pitcher?.id;
 
     for (const ev of (play.playEvents || [])) {
       // Only pitch events with a review
@@ -366,30 +377,33 @@ async function fetchGameChallenges(gamePk) {
       // Determine if batter or fielder (catcher/pitcher) challenged
       // Call code 'C' = called strike → batter challenges
       // Call code 'B' = ball → fielder (catcher) challenges
-      // BULLETPROOF ROLE LOGIC
-      // The call code is the definitive source of truth — it never lies.
-      // 'C' (Called Strike) = the batter challenged. Always. No exceptions.
-      // 'B' (Called Ball)   = a fielder challenged (catcher or pitcher).
-      //
-      // For called balls: check if the challenger is the pitcher.
-      // We use last-name comparison to handle display name mismatches
-      // (e.g. "Brent Rooker" vs "B. Rooker" or accent differences).
-      const callCode = ev.details?.call?.code || '';
+      // ── BULLETPROOF ROLE CLASSIFICATION ──────────────────────
+      // Method 1 (primary): Match challenger's MLB player ID against
+      //   batter ID and pitcher ID from the matchup. IDs never lie.
+      // Method 2 (fallback): Use call code — 'C' always means batter challenged.
+      // Method 3 (last resort): Last-name fuzzy match for pitcher check.
+      // ────────────────────────────────────────────────────────────
+      const callCode     = ev.details?.call?.code || '';
+      const challengerId = rev.player?.id;
       let role;
 
-      if (callCode === 'C') {
-        // Called strike → always the batter at the plate
+      if (challengerId && batterId && challengerId === batterId) {
+        // Challenger IS the batter — definitive via ID match
+        role = 'Batter';
+      } else if (challengerId && pitcherId && challengerId === pitcherId) {
+        // Challenger IS the pitcher — definitive via ID match
+        role = 'Pitcher';
+      } else if (callCode === 'C') {
+        // Called strike — by rule, only the batter can challenge this
+        // (even if ID was missing/mismatched)
         role = 'Batter';
       } else {
-        // Called ball → fielder challenged
-        // Check if challenger is the pitcher using last-name fuzzy match
+        // Called ball — fielder challenged. Check if pitcher via last name.
         const challLast   = challenger.split(' ').slice(-1)[0].toLowerCase();
         const pitcherLast = pitcher.split(' ').slice(-1)[0].toLowerCase();
-        if (challLast && pitcherLast && challLast === pitcherLast) {
-          role = 'Pitcher';
-        } else {
-          role = 'Catcher'; // default — catchers do ~95% of fielder challenges
-        }
+        role = (challLast && pitcherLast && challLast === pitcherLast)
+          ? 'Pitcher'
+          : 'Catcher';
       }
 
       const count = ev.count || {};
