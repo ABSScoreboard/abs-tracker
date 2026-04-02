@@ -52,7 +52,8 @@
   .tweet-box{background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:14px;font-family:var(--mono);font-size:12.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;}
   .tweet-acts{display:flex;align-items:center;justify-content:space-between;margin-top:9px;flex-wrap:wrap;gap:8px;}
   .char-ct{font-size:12px;font-family:var(--mono);color:var(--muted);}
-  .char-ct.over{color:var(--red);}
+  .char-ct.over{color:var(--red);font-weight:600;}
+  .char-ct.warn{color:var(--amber);}
   .copy-btn{display:flex;align-items:center;gap:5px;padding:6px 13px;background:transparent;border:1px solid var(--border);border-radius:7px;color:var(--muted);font-family:var(--sans);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s;}
   .copy-btn:hover{border-color:var(--green);color:var(--green);}
   .copy-btn.ok{border-color:var(--green);color:var(--green);background:rgba(0,200,122,.08);}
@@ -237,6 +238,20 @@ let activeTab = 'scorecards';
 let DB = { challenges: [], players: [], umpires: [] };
 let lastUpdated = null;
 
+// ── LIVE ROSTER POSITION CACHE ──────────────────────────────
+// Populated at refresh time from the MLB Stats API.
+// Keys: MLB player ID (number) → position abbreviation string
+// e.g. 682626 → 'C', 592450 → 'RF', 666142 → 'P'
+//
+// Position abbreviations that mean Catcher: 'C'
+// Position abbreviations that mean Pitcher: 'P', 'SP', 'RP', 'CP'
+// Everything else is treated as a Batter/fielder position
+//
+// This cache is always current — it updates every time you hit Refresh Data.
+const ROSTER_POSITIONS = {};   // id → position abbreviation
+let rosterLoaded = false;
+// ─────────────────────────────────────────────────────────────
+
 // Umpire cache: gamePk → umpire name
 // Populated upfront via the schedule+officials hydration so it's always available
 const umpireCache = {};
@@ -326,6 +341,46 @@ async function fetchScheduleAndUmpires() {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  STEP 1b: FETCH LIVE ROSTER POSITIONS FROM MLB API
+//  One request returns all ~1200+ active MLB players with positions.
+//  We store id → positionAbbreviation for use in role classification.
+// ═══════════════════════════════════════════════════════════
+async function fetchRosterPositions() {
+  try {
+    // This endpoint returns all active MLB players for the current season
+    const url = `${MLB_API}/sports/1/players?season=2026&gameType=R`;
+    const data = await mlbFetch(url);
+    let count = 0;
+    for (const player of (data.people || [])) {
+      const id  = player.id;
+      const pos = player.primaryPosition?.abbreviation || '';
+      if (id && pos) {
+        ROSTER_POSITIONS[id] = pos;
+        count++;
+      }
+    }
+    rosterLoaded = true;
+    console.log(`✅ Roster positions loaded: ${count} players`);
+  } catch (e) {
+    // Non-fatal — role classification falls back to ID matching + call code
+    console.warn('Roster positions fetch failed (non-fatal):', e.message);
+  }
+}
+
+// Helper: given a player ID, return their role ('Batter','Pitcher','Catcher')
+// using the live roster cache
+function getRoleFromRoster(playerId) {
+  if (!playerId || !rosterLoaded) return null;
+  const pos = ROSTER_POSITIONS[playerId];
+  if (!pos) return null;
+  if (pos === 'C')                          return 'Catcher';
+  if (pos === 'P' || pos === 'SP' ||
+      pos === 'RP' || pos === 'CP')         return 'Pitcher';
+  // Everything else (1B, 2B, 3B, SS, LF, CF, RF, DH, OF, IF, UT)
+  return 'Batter';
+}
+
+// ═══════════════════════════════════════════════════════════
 //  STEP 2: FETCH CHALLENGES FROM EACH GAME'S PLAY-BY-PLAY
 //
 //  CONFIRMED from live API probe:
@@ -383,32 +438,41 @@ async function fetchGameChallenges(gamePk) {
       // Call code 'C' = called strike → batter challenges
       // Call code 'B' = ball → fielder (catcher) challenges
       // ── BULLETPROOF ROLE CLASSIFICATION ──────────────────────
-      // Method 1 (primary): Match challenger's MLB player ID against
-      //   batter ID and pitcher ID from the matchup. IDs never lie.
-      // Method 2 (fallback): Use call code — 'C' always means batter challenged.
-      // Method 3 (last resort): Last-name fuzzy match for pitcher check.
+      // 4-layer system using live MLB roster data:
+      //
+      // Rule 1 (ID match): Challenger ID vs batter/pitcher ID — definitive.
+      // Rule 2 (Call code): 'C' = called strike = only batter can challenge.
+      // Rule 3 (Live roster): MLB API position lookup by challenger's ID.
+      //   Always current — updates every Refresh Data click.
+      //   Handles mid-season trades, callups, and roster moves automatically.
+      // Rule 4 (Last resort): Last-name fuzzy match against pitcher.
       // ────────────────────────────────────────────────────────────
       const callCode     = ev.details?.call?.code || '';
       const challengerId = rev.player?.id;
       let role;
 
       if (challengerId && batterId && challengerId === batterId) {
-        // Challenger IS the batter — definitive via ID match
+        // Rule 1a: Challenger IS the batter — definitive via MLB player ID
         role = 'Batter';
       } else if (challengerId && pitcherId && challengerId === pitcherId) {
-        // Challenger IS the pitcher — definitive via ID match
+        // Rule 1b: Challenger IS the pitcher — definitive via MLB player ID
         role = 'Pitcher';
       } else if (callCode === 'C') {
-        // Called strike — by rule, only the batter can challenge this
-        // (even if ID was missing/mismatched)
+        // Rule 2: Called strike — by MLB rule, ONLY the batter can challenge
         role = 'Batter';
       } else {
-        // Called ball — fielder challenged. Check if pitcher via last name.
-        const challLast   = challenger.split(' ').slice(-1)[0].toLowerCase();
-        const pitcherLast = pitcher.split(' ').slice(-1)[0].toLowerCase();
-        role = (challLast && pitcherLast && challLast === pitcherLast)
-          ? 'Pitcher'
-          : 'Catcher';
+        // Rule 3: Live roster lookup using challenger's MLB player ID
+        const rosterRole = getRoleFromRoster(challengerId);
+        if (rosterRole) {
+          role = rosterRole;
+        } else {
+          // Rule 4: Last-name fuzzy match against pitcher in matchup
+          const challLast   = challenger.split(' ').slice(-1)[0].toLowerCase();
+          const pitcherLast = pitcher.split(' ').slice(-1)[0].toLowerCase();
+          role = (challLast && pitcherLast && challLast === pitcherLast)
+            ? 'Pitcher'
+            : 'Catcher';
+        }
       }
 
       const count = ev.count || {};
@@ -455,8 +519,12 @@ async function loadAll() {
   prog(5, 'Fetching schedule and umpire assignments…');
 
   try {
-    // Step 1: get all completed gamePks + populate umpire cache
-    const gamePks = await fetchScheduleAndUmpires();
+    // Step 1: fetch roster positions and schedule concurrently for speed
+    prog(8, 'Fetching roster positions and game schedule…');
+    const [gamePks] = await Promise.all([
+      fetchScheduleAndUmpires(),
+      fetchRosterPositions(),  // runs in parallel — always current
+    ]);
     if (!gamePks.length) throw new Error('No completed games found yet.');
 
     prog(18, `Found ${gamePks.length} games — fetching ABS challenges…`);
@@ -678,19 +746,22 @@ function highlightTweet(c) {
   return trimTo280(lines.join('\n'));
 }
 
-// Trim tweet to 280 chars, cutting challenge lines if needed
+// Trim tweet to 280 Twitter-weighted chars, cutting challenge lines if needed
 function trimTo280(text) {
-  if (text.length <= 280) return text;
-  // Trim line by line from the middle outward
+  if (twitterLen(text) <= 280) return text;
   const lines = text.split('\n');
-  while (lines.join('\n').length > 280 && lines.length > 3) {
-    // Remove the last challenge line (before the empty line + hashtags)
+  while (twitterLen(lines.join('\n')) > 280 && lines.length > 3) {
     const hashIdx = lines.findLastIndex(l => l.startsWith('#'));
     const cutIdx  = hashIdx > 2 ? hashIdx - 2 : lines.length - 2;
     if (cutIdx > 1) lines.splice(cutIdx, 1);
     else break;
   }
-  return lines.join('\n').slice(0, 280);
+  // Final hard cap using Twitter length
+  let result = lines.join('\n');
+  while (twitterLen(result) > 280) {
+    result = [...result].slice(0, -1).join('');
+  }
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -902,10 +973,22 @@ function updateStatus() {
     <div>🕐 Updated: <strong>${lastUpdated?.toLocaleTimeString() || '—'}</strong></div>`;
 }
 
+// Twitter-accurate character count.
+// Twitter counts most emoji as 2 characters.
+// We detect these via Unicode code point > 0xFFFF (surrogate pairs in JS).
+function twitterLen(text) {
+  let count = 0;
+  for (const char of text) {
+    // Code points > 0xFFFF are emoji/special chars Twitter counts as 2
+    count += char.codePointAt(0) > 0xFFFF ? 2 : 1;
+  }
+  return count;
+}
+
 function twActs(t) {
-  const n = t.length, cls = n > 280 ? 'over' : '';
+  const n = twitterLen(t), cls = n > 280 ? 'over' : '';
   return `<div class="tweet-acts">
-    <span class="char-ct ${cls}">${n} / 280 chars</span>
+    <span class="char-ct ${cls}">${n} / 280 Twitter chars</span>
     <button class="copy-btn" onclick="cp(this,${JSON.stringify(t)})">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       Copy tweet
@@ -1459,8 +1542,8 @@ function renderStudio() {
 
 // Build one studio card with a tweet draft + hook + context
 function studioCard(labelColor, labelText, hookLine, whyLine, tweetText, badge) {
-  const n = tweetText.length;
-  const cls = n > 280 ? 'over' : '';
+  const n = twitterLen(tweetText);
+  const cls = n > 280 ? 'over' : n > 260 ? 'warn' : '';
   const badgeHtml = badge || '';
   return `
   <div class="studio-card">
