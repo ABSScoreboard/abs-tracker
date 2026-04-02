@@ -278,41 +278,46 @@ function monthChunks(start, end) {
 async function fetchScheduleAndUmpires() {
   const gameType  = season === 'S' ? 'S' : 'R';
   const startDate = season === 'S' ? SEASON_START_S : SEASON_START_R;
-  // Use today (not yesterday) so games that finish tonight are included immediately
   const endDate   = season === 'S' ? SEASON_END_S   : todayStr();
 
   console.log(`Schedule: ${startDate} → ${endDate} (${gameType})`);
 
   const pks = [];
 
-  for (const [cs, ce] of monthChunks(startDate, endDate)) {
-    try {
-      // hydrate=officials gives us the umpire crew in the same response
-      const url = `${MLB_API}/schedule?sportId=1&startDate=${cs}&endDate=${ce}&gameType=${gameType}&hydrate=officials`;
-      const data = await mlbFetch(url);
-      let nFinal = 0;
+  // ONE request for the full season — no chunking, no edge cases.
+  // The MLB schedule API handles large date ranges without issue.
+  try {
+    const url = `${MLB_API}/schedule?sportId=1&startDate=${startDate}&endDate=${endDate}&gameType=${gameType}&hydrate=officials`;
+    const data = await mlbFetch(url);
+    let nFinal = 0;
 
-      for (const dateObj of (data.dates || [])) {
-        for (const game of (dateObj.games || [])) {
-          // Accept 'Final' and 'Game Over' — West Coast games sometimes
-          // briefly show 'Game Over' before transitioning to 'Final'
-          const gameState = game.status?.abstractGameState;
-          if (gameState !== 'Final' && gameState !== 'Game Over') continue;
-          pks.push(game.gamePk);
-          nFinal++;
+    for (const dateObj of (data.dates || [])) {
+      for (const game of (dateObj.games || [])) {
+        const state = game.status?.abstractGameState;
+        const code  = game.status?.abstractGameCode;
+        // Accept by state name OR by single-letter code 'F'
+        // This catches games in all completed states regardless of
+        // how the API labels them at the exact moment of the request
+        const isComplete = state === 'Final'
+          || state === 'Game Over'
+          || code  === 'F';
+        if (!isComplete) continue;
 
-          // Extract home plate umpire and cache by gamePk
-          const officials = game.officials || [];
-          const hpUmp = officials.find(o => o.officialType === 'Home Plate');
-          if (hpUmp?.official?.fullName) {
-            umpireCache[game.gamePk] = hpUmp.official.fullName;
-          }
+        pks.push(game.gamePk);
+        nFinal++;
+
+        // Cache umpire from schedule response (hydrate=officials)
+        const officials = game.officials || [];
+        const hpUmp = officials.find(o => o.officialType === 'Home Plate');
+        if (hpUmp?.official?.fullName) {
+          umpireCache[game.gamePk] = hpUmp.official.fullName;
         }
       }
-      console.log(`  ${cs}→${ce}: ${nFinal} Final games`);
-    } catch (e) {
-      console.warn(`  Schedule chunk failed (${cs}):`, e.message);
     }
+    console.log(`Found ${nFinal} completed games (${data.dates?.length || 0} dates scanned)`);
+  } catch (e) {
+    console.error('Schedule fetch failed:', e.message);
+    throw e;
   }
 
   const unique = [...new Set(pks)];
