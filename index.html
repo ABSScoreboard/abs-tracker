@@ -418,9 +418,22 @@ async function fetchGameChallenges(gamePk) {
     const pitcherId = matchup.pitcher?.id;
 
     for (const ev of (play.playEvents || [])) {
-      // Only pitch events with a review
-      if (ev.type !== 'pitch') continue;
-      if (ev.details?.hasReview !== true) continue;
+      // WIDE NET challenge detection — catches all ways MLB stores ABS challenges:
+      // Method A: pitch events with hasReview=true (standard case)
+      // Method B: any event with reviewDetails.player set (edge case storage)
+      // Method C: any event with hasReview=true regardless of event type
+      const hasReviewFlag = ev.details?.hasReview === true;
+      const hasRevPlayer  = ev.reviewDetails?.player?.fullName != null;
+      if (!hasReviewFlag && !hasRevPlayer) continue;
+
+      // Confirm it's a ball/strike call — filter non-pitch reviews
+      // by requiring a ball/strike call code OR known ABS reviewType 'MJ'
+      const callCode = ev.details?.call?.code || '';
+      const revType  = (ev.reviewDetails?.reviewType || '').toUpperCase();
+      const isPitchCall = ev.type === 'pitch'
+        || callCode === 'B' || callCode === 'C'
+        || revType === 'MJ' || revType === 'ABS';
+      if (!isPitchCall) continue;
 
       const rev = ev.reviewDetails || {};
 
@@ -447,7 +460,6 @@ async function fetchGameChallenges(gamePk) {
       //   Handles mid-season trades, callups, and roster moves automatically.
       // Rule 4 (Last resort): Last-name fuzzy match against pitcher.
       // ────────────────────────────────────────────────────────────
-      const callCode     = ev.details?.call?.code || '';
       const challengerId = rev.player?.id;
       let role;
 
@@ -1962,5 +1974,73 @@ function buildMilestoneSection() {
 }
 
 </script>
+
+<script>
+// ═══════════════════════════════════════════════════
+// DIAGNOSTIC — auto-runs on page load
+// Fetches MIN@KC April 1 and logs every event structure
+// ═══════════════════════════════════════════════════
+async function runDiagnostic() {
+  console.log('=== DIAGNOSTIC START ===');
+  try {
+    // Step 1: Get the gamePk
+    const schedResp = await fetch('https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=2026-04-01&endDate=2026-04-01&gameType=R');
+    const schedData = await schedResp.json();
+    const games = schedData.dates?.[0]?.games || [];
+    const minKC = games.find(g =>
+      g.teams.away.team.abbreviation === 'MIN' &&
+      g.teams.home.team.abbreviation === 'KC'
+    );
+    if (!minKC) { console.log('MIN@KC not found'); return; }
+    console.log('MIN@KC gamePk:', minKC.gamePk, 'status:', minKC.status.abstractGameState, minKC.status.abstractGameCode);
+
+    // Step 2: Fetch full game feed
+    const feedResp = await fetch(`https://statsapi.mlb.com/api/v1.1/game/${minKC.gamePk}/feed/live`);
+    const feedData = await feedResp.json();
+    const plays = feedData.liveData?.plays?.allPlays || [];
+    console.log('Total plays:', plays.length);
+
+    // Step 3: Log EVERY event that could be a challenge
+    let found = 0;
+    plays.forEach((play, pi) => {
+      (play.playEvents || []).forEach((ev, ei) => {
+        const hasR  = ev.details?.hasReview;
+        const revD  = ev.reviewDetails || {};
+        const desc  = (ev.details?.description || '').toLowerCase();
+        const code  = ev.details?.call?.code || '';
+        const isInteresting =
+          hasR === true ||
+          hasR === false && Object.keys(revD).length > 0 ||
+          desc.includes('challenge') ||
+          desc.includes('overturn') ||
+          desc.includes('confirmed') ||
+          desc.includes('review') ||
+          code === 'C' || code === 'B';
+
+        if (isInteresting) {
+          found++;
+          console.log(
+            `[${found}] Inn:${play.about?.inning} ${play.about?.halfInning}`,
+            `| play:${pi} ev:${ei}`,
+            `| type:${ev.type}`,
+            `| hasReview:${hasR}`,
+            `| code:${code}`,
+            `| desc:"${ev.details?.description}"`,
+            `| revKeys:${Object.keys(revD).join(',')}`,
+            `| isOverturned:${revD.isOverturned}`,
+            `| player:${revD.player?.fullName}`,
+            `| reviewType:${revD.reviewType}`
+          );
+        }
+      });
+    });
+    console.log('=== Total interesting events:', found, '===');
+  } catch(e) {
+    console.error('Diagnostic error:', e);
+  }
+}
+window.addEventListener('load', runDiagnostic);
+</script>
+
 </body>
 </html>
