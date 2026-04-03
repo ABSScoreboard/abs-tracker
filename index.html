@@ -178,12 +178,12 @@
 
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab(this,'scorecards')">⚾ Game Scorecards</button>
+    <button class="tab-btn" onclick="switchTab(this,'studio')">✏️ Tweet Studio</button>
     <button class="tab-btn" onclick="switchTab(this,'players')">🏆 Player Leaderboard</button>
     <button class="tab-btn" onclick="switchTab(this,'umpires')">🧑‍⚖️ Umpire Accuracy</button>
     <button class="tab-btn" onclick="switchTab(this,'weekly')">📅 Weekly Recap</button>
     <button class="tab-btn" onclick="switchTab(this,'h2h')">⚔️ Player vs. Umpire</button>
     <button class="tab-btn" onclick="switchTab(this,'teamump')">🏟️ Team vs. Umpire</button>
-    <button class="tab-btn" onclick="switchTab(this,'studio')">✏️ Tweet Studio</button>
   </div>
 
   <div class="tab-panel active" id="tab-scorecards">
@@ -409,36 +409,6 @@ async function fetchGameChallenges(gamePk) {
 
   const plays = data?.liveData?.plays?.allPlays || [];
   const challenges = [];
-
-  // DEEP DIAGNOSTIC: log full event structure for MIN@KC April 1
-  const isDiagGame = (away === 'MIN' && home === 'KC') || (away === 'KC' && home === 'MIN');
-  if (isDiagGame) {
-    console.log(`
-====== DEEP DIAGNOSTIC: ${away}@${home} (${date}) gamePk=${gamePk} ======`);
-    console.log(`Total plays: ${plays.length}`);
-    plays.forEach((play, pi) => {
-      (play.playEvents || []).forEach((ev, ei) => {
-        // Log EVERYTHING that has any review-related field
-        const hasR = ev.details?.hasReview;
-        const revD = ev.reviewDetails || {};
-        const revKeys = Object.keys(revD);
-        const desc = ev.details?.description || '';
-        const code = ev.details?.call?.code || '';
-        if (hasR !== undefined || revKeys.length > 0 ||
-            desc.toLowerCase().includes('challenge') ||
-            desc.toLowerCase().includes('review') ||
-            desc.toLowerCase().includes('overturn') ||
-            desc.toLowerCase().includes('confirmed')) {
-          console.log(`  [play${pi} ev${ei}] type=${ev.type} hasReview=${hasR} code=${code}`);
-          console.log(`    desc: "${desc}"`);
-          console.log(`    revKeys: [${revKeys.join(', ')}]`);
-          if (revKeys.length > 0) console.log(`    revDetails:`, JSON.stringify(revD));
-        }
-      });
-    });
-    console.log(`====== END DIAGNOSTIC ======
-`);
-  }
 
   for (const play of plays) {
     const matchup   = play.matchup || {};
@@ -1549,6 +1519,348 @@ function renderTeamUmp() {
     </div>
   `;
 }
+
+function setTeamUmpFilter(val) {
+  teamUmpFilter = val;
+  renderTeamUmp();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  TWEET STUDIO — Mon/Wed/Fri themed tweet formats
+//  Each day has 2-3 auto-generated options from live data.
+//  Copy button writes to clipboard directly.
+// ═══════════════════════════════════════════════════════════
+
+function renderStudio() {
+  const el = $('cnt-studio');
+  if (!DB.challenges.length) {
+    el.innerHTML = emptyHtml('✏️', 'No data yet', 'Click Refresh Data first.');
+    return;
+  }
+
+  // Determine which day's content to show based on today's day
+  const dow = new Date().getDay(); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+  // Map to nearest content day: Mon=1, Wed=3, Fri=5
+  // Default to Friday content on non-content days (Tue/Thu/Sat/Sun)
+  let activeDay = 'friday';
+  if (dow === 1) activeDay = 'monday';
+  else if (dow === 3) activeDay = 'wednesday';
+  else if (dow === 5) activeDay = 'friday';
+
+  el.innerHTML = `
+    <!-- Day selector tabs -->
+    <div style="display:flex;gap:4px;margin-bottom:22px;background:var(--bg3);padding:4px;border-radius:10px;border:1px solid var(--border);">
+      ${['monday','wednesday','friday'].map(day => `
+        <button onclick="studioSetDay('${day}')"
+          id="studio-day-${day}"
+          style="flex:1;padding:10px 8px;border:none;border-radius:7px;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;
+            background:${activeDay===day?'var(--green)':'transparent'};
+            color:${activeDay===day?'#000':'var(--muted)'};">
+          ${day === 'monday' ? '📅 Monday' : day === 'wednesday' ? '🧑‍⚖️ Wednesday' : '🏆 Friday'}
+        </button>`).join('')}
+    </div>
+    <!-- Content area -->
+    <div id="studio-day-content">${buildDayContent(activeDay)}</div>
+  `;
+}
+
+function studioSetDay(day) {
+  ['monday','wednesday','friday'].forEach(d => {
+    const btn = $(`studio-day-${d}`);
+    if (!btn) return;
+    btn.style.background = d === day ? 'var(--green)' : 'transparent';
+    btn.style.color      = d === day ? '#000' : 'var(--muted)';
+  });
+  $('studio-day-content').innerHTML = buildDayContent(day);
+}
+
+function buildDayContent(day) {
+  if (day === 'monday')    return buildMondayContent();
+  if (day === 'wednesday') return buildWednesdayContent();
+  return buildFridayContent();
+}
+
+// ── MONDAY: Weekly Recap ────────────────────────────────────
+// Theme: look back at last week's best moments
+function buildMondayContent() {
+  const cut    = new Date(); cut.setDate(cut.getDate() - 7);
+  const cutStr = cut.toISOString().split('T')[0];
+  const week   = DB.challenges.filter(c => c.game_date >= cutStr);
+  const tot    = week.length;
+  const ov     = week.filter(c => c.result === 'Overturned').length;
+  const pct    = tot ? Math.round(100 * ov / tot) : 0;
+
+  // Build per-player stats for the week
+  const wmap = {};
+  week.forEach(c => {
+    if (!wmap[c.challenger]) wmap[c.challenger] = { name:c.challenger, role:c.role, total:0, ov:0 };
+    wmap[c.challenger].total++;
+    if (c.result === 'Overturned') wmap[c.challenger].ov++;
+  });
+  const topW = Object.values(wmap)
+    .map(p => ({ ...p, rate: p.ov/p.total }))
+    .sort((a,b) => b.ov - a.ov || b.rate - a.rate)
+    .slice(0, 5);
+
+  // Best single umpire week
+  const umap = {};
+  week.forEach(c => {
+    if (!umap[c.umpire]) umap[c.umpire] = { total:0, ov:0 };
+    umap[c.umpire].total++;
+    if (c.result === 'Overturned') umap[c.umpire].ov++;
+  });
+  const worstUmp = Object.entries(umap)
+    .filter(([,s]) => s.total >= 3)
+    .sort((a,b) => (b[1].ov/b[1].total) - (a[1].ov/a[1].total))[0];
+
+  // Tweet A: Classic weekly recap leaderboard
+  const tweetA = trimTo280([
+    `⚾ ABS Challenge Week in Review`,
+    ``,
+    `📊 ${tot} challenges · ${ov} overturned (${pct}%)`,
+    ``,
+    `Top challengers this week:`,
+    ...topW.map((p,i) =>
+      `${MED[i]||`${i+1}.`} ${roleTag(p.role)} ${shortName(p.name)}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`),
+    ``,
+    `#MLB #ABSChallenge`
+  ].join('\n'));
+
+  // Tweet B: Story-driven recap with best moment
+  const best = topW[0];
+  const tweetB = best ? trimTo280([
+    `This week in ABS challenges 🧵`,
+    ``,
+    `${best.name} led all players with ${best.ov} overturns (${Math.round(best.rate*100)}% success).`,
+    ``,
+    `League-wide: ${ov}/${tot} calls overturned (${pct}%).`,
+    tot >= 20 ? `Umpires are getting exposed. The data doesn't lie.` : ``,
+    ``,
+    `#MLB #ABSChallenge #RoboUmp`
+  ].join('\n')) : null;
+
+  // Tweet C: Umpire of the week callout
+  const tweetC = worstUmp ? trimTo280([
+    `🧑‍⚖️ Umpire of the Week (for all the wrong reasons)`,
+    ``,
+    `${worstUmp[0]}`,
+    `${worstUmp[1].ov}/${worstUmp[1].total} calls overturned this week (${Math.round(100*worstUmp[1].ov/worstUmp[1].total)}%)`,
+    ``,
+    `Accountability, every week.`,
+    ``,
+    `#MLB #ABSChallenge #Umpires`
+  ].join('\n')) : null;
+
+  const cards = [
+    { label:'📋 Weekly Leaderboard', why:'Classic format — best for engagement on Mondays', tweet: tweetA },
+    tweetB ? { label:'📖 Story Format', why:'More narrative, performs well with casual fans', tweet: tweetB } : null,
+    tweetC ? { label:'🧑‍⚖️ Umpire of the Week', why:'Tag @UmpScorecards for extra reach', tweet: tweetC, badge:'🔥 Tag @UmpScorecards' } : null,
+  ].filter(Boolean);
+
+  return renderDaySection('Monday Recap', 'Look back at last week · post between 9–11am ET', cards);
+}
+
+// ── WEDNESDAY: Umpire Accountability ───────────────────────
+// Theme: mid-week umpire data dump — pairs with @UmpScorecards
+function buildWednesdayContent() {
+  const qualUmps = DB.umpires.filter(u => u.total >= 5)
+    .sort((a,b) => b.rate - a.rate);
+  const bestUmps = DB.umpires.filter(u => u.total >= 5)
+    .sort((a,b) => a.rate - b.rate).slice(0,5);
+
+  const tot = DB.challenges.length;
+  const ov  = DB.challenges.filter(c => c.result === 'Overturned').length;
+  const pct = tot ? Math.round(100*ov/tot) : 0;
+
+  // Tweet A: Season worst umpires ranked
+  const tweetA = qualUmps.length ? trimTo280([
+    `🧑‍⚖️ Umpire ABS Accuracy — 2026 Season`,
+    `(% of calls overturned when challenged)`,
+    ``,
+    ...qualUmps.slice(0,8).map((u,i) => {
+      const upct = Math.round(u.rate*100);
+      return `${MED[i]||`${i+1}.`} ${shortName(u.name)}  ${upct}% (${u.ov}/${u.total})`;
+    }),
+    ``,
+    `(min. 5 challenges faced) #MLB #ABSChallenge #Umpires`
+  ].join('\n')) : null;
+
+  // Tweet B: Worst single umpire callout
+  const worst = qualUmps[0];
+  const tweetB = worst ? trimTo280([
+    `${worst.name} has had ${worst.ov} of ${worst.total} challenged calls overturned this season.`,
+    ``,
+    `That's ${Math.round(worst.rate*100)}% — the highest overturn rate in MLB.`,
+    ``,
+    `At what point does this affect job security?`,
+    ``,
+    `#MLB #ABSChallenge #Umpires`
+  ].join('\n')) : null;
+
+  // Tweet C: Best umpires (balanced content)
+  const tweetC = bestUmps.length >= 3 ? trimTo280([
+    `Not all umpires are getting exposed 👀`,
+    ``,
+    `Most accurate HP umpires this season:`,
+    ...bestUmps.map((u,i) =>
+      `${MED[i]||`${i+1}.`} ${shortName(u.name)}  ${Math.round(u.rate*100)}% (${u.ov}/${u.total})`),
+    ``,
+    `(min. 5 challenges faced) #MLB #ABSChallenge`
+  ].join('\n')) : null;
+
+  const cards = [
+    tweetA ? { label:'📊 Full Umpire Rankings', why:'Most shareable — the full leaderboard', tweet: tweetA, badge:'🔥 Tag @UmpScorecards' } : null,
+    tweetB ? { label:'🎯 Single Umpire Callout', why:'High engagement — controversy drives clicks', tweet: tweetB, badge:'🔥 Tag @UmpScorecards' } : null,
+    tweetC ? { label:'✅ Most Accurate Umpires', why:'Balanced content — builds credibility', tweet: tweetC } : null,
+  ].filter(Boolean);
+
+  return renderDaySection('Wednesday Umpire Report', 'Accountability content · tag @UmpScorecards', cards);
+}
+
+// ── FRIDAY: Player Leaderboards ─────────────────────────────
+// Theme: end-of-week player rankings — most shareable
+function buildFridayContent() {
+  const qualified = DB.players.filter(p => p.total >= 3)
+    .sort((a,b) => b.rate - a.rate || b.ov - a.ov);
+  const byVolume  = DB.players.filter(p => p.total >= 3)
+    .sort((a,b) => b.ov - a.ov);
+  const catchers  = DB.players.filter(p => p.role === 'Catcher' && p.total >= 3)
+    .sort((a,b) => b.rate - a.rate);
+
+  if (!qualified.length) return '<div class="empty"><div class="ico">🏆</div><h3>Not enough data yet</h3><p>Need at least 3 challenges per player</p></div>';
+
+  const leader = qualified[0];
+
+  // Tweet A: Season rate leaderboard
+  const tweetA = trimTo280([
+    `🏆 Best ABS Challengers — 2026 Season`,
+    `(min. 3 challenges)`,
+    ``,
+    ...qualified.slice(0,8).map((p,i) =>
+      `${MED[i]||`${i+1}.`} ${roleTag(p.role)} ${shortName(p.name)}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`),
+    ``,
+    `#MLB #ABSChallenge`
+  ].join('\n'));
+
+  // Tweet B: Raw volume leaderboard
+  const tweetB = trimTo280([
+    `⚾ Most ABS overturns this season:`,
+    ``,
+    ...byVolume.slice(0,8).map((p,i) =>
+      `${MED[i]||`${i+1}.`} ${roleTag(p.role)} ${shortName(p.name)}  ${p.ov} overturned`),
+    ``,
+    `#MLB #ABSChallenge`
+  ].join('\n'));
+
+  // Tweet C: Catchers specifically or hot take on leader
+  let tweetC = null;
+  if (catchers.length >= 3) {
+    tweetC = trimTo280([
+      `🥎 Catchers are dominating ABS challenges`,
+      ``,
+      ...catchers.slice(0,6).map((p,i) =>
+        `${MED[i]||`${i+1}.`} (C) ${shortName(p.name)}  ${p.ov}/${p.total} (${Math.round(p.rate*100)}%)`),
+      ``,
+      `Pitchers: just let the catcher handle it.`,
+      `#MLB #ABSChallenge`
+    ].join('\n'));
+  } else if (leader && leader.rate >= 0.70) {
+    tweetC = trimTo280([
+      `${leader.name} is basically cheating the ABS system.`,
+      ``,
+      `${leader.ov}/${leader.total} challenges overturned (${Math.round(leader.rate*100)}%).`,
+      ``,
+      `At this point just let them call their own strikes.`,
+      ``,
+      `#MLB #ABSChallenge`
+    ].join('\n'));
+  }
+
+  const cards = [
+    { label:'📊 Success Rate Leaderboard', why:'Best for Fridays — weekly data resonates', tweet: tweetA },
+    { label:'🔢 Volume Leaderboard', why:'Casual fans prefer raw numbers to percentages', tweet: tweetB },
+    tweetC ? { label: catchers.length >= 3 ? '🥎 Catcher Spotlight' : '🔥 Hot Take', why: catchers.length >= 3 ? 'Position-specific content drives team fan engagement' : 'Viral potential — tag the player', tweet: tweetC, badge: catchers.length < 3 && leader?.rate >= 0.70 ? '🔥 Tag the player' : null } : null,
+  ].filter(Boolean);
+
+  return renderDaySection('Friday Leaderboard', 'Player rankings · most shareable content of the week', cards);
+}
+
+// ── SHARED RENDERER ─────────────────────────────────────────
+function renderDaySection(title, subtitle, cards) {
+  return `
+    <div style="margin-bottom:16px;">
+      <div class="sec-ttl">${title}</div>
+      <div class="sec-sub" style="margin-top:2px;">${subtitle}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      ${cards.map((card, i) => renderStudioCard(card, i)).join('')}
+    </div>
+  `;
+}
+
+function renderStudioCard(card, index) {
+  const n   = twitterLen(card.tweet);
+  const cls = n > 280 ? 'over' : n > 260 ? 'warn' : '';
+  const optionLabels = ['Option A', 'Option B', 'Option C'];
+  const badgeHtml = card.badge
+    ? `<span class="fire-badge">${card.badge}</span>`
+    : '';
+
+  // Unique ID for this card's copy button
+  const btnId = `copy-btn-${index}-${Date.now()}`;
+
+  return `
+    <div class="studio-card">
+      <div class="studio-card-label">
+        <div class="studio-card-label-dot" style="background:var(--green)"></div>
+        ${optionLabels[index] || `Option ${index+1}`} · ${card.label}
+        ${badgeHtml}
+      </div>
+      <div class="studio-why">${card.why}</div>
+      <div class="tweet-box">${esc(card.tweet)}</div>
+      <div class="tweet-acts">
+        <span class="char-ct ${cls}">${n} / 280 Twitter chars</span>
+        <button class="copy-btn" id="${btnId}"
+          onclick="studioCP(this, ${JSON.stringify(card.tweet)})">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          Copy tweet
+        </button>
+      </div>
+    </div>`;
+}
+
+// Dedicated copy function for studio — avoids JSON.stringify escaping issues
+function studioCP(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.innerHTML;
+    btn.classList.add('ok');
+    btn.textContent = '✓ Copied!';
+    const tk = $('toast');
+    if (tk) { tk.classList.add('on'); setTimeout(() => tk.classList.remove('on'), 1800); }
+    setTimeout(() => {
+      btn.classList.remove('ok');
+      btn.innerHTML = orig;
+    }, 2500);
+  }).catch(() => {
+    // Fallback: select text in tweet box
+    const box = btn.closest('.studio-card').querySelector('.tweet-box');
+    if (box) {
+      const range = document.createRange();
+      range.selectNodeContents(box);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('copy');
+      btn.textContent = '✓ Copied!';
+      setTimeout(() => { btn.innerHTML = btn.innerHTML; }, 2000);
+    }
+  });
+}
+
 
 function setTeamUmpFilter(val) {
   teamUmpFilter = val;
