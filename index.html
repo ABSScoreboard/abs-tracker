@@ -1029,8 +1029,9 @@ function prog(pct, lbl) {
 function progOff() { $('prog-wrap').classList.remove('on'); }
 
 function allLoading() {
-  ['scorecards','players','umpires','weekly'].forEach(id => {
-    $(`cnt-${id}`).innerHTML = `<div class="spin-wrap"><div class="spinner"></div> Loading from MLB API…</div>`;
+  ['scorecards','hitters','fielders','umpires','weekly'].forEach(id => {
+    const el = $(`cnt-${id}`);
+    if (el) el.innerHTML = `<div class="spin-wrap"><div class="spinner"></div> Loading…</div>`;
   });
 }
 
