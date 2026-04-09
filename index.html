@@ -207,13 +207,16 @@
     <div id="cnt-scorecards"><div class="empty"><div class="ico">⚾</div><h3>No data yet</h3><p>Click Refresh Data to pull all 2026 ABS challenges</p></div></div>
   </div>
   <div class="tab-panel" id="tab-hitters">
-    <div id="cnt-hitters" class="tab-content"></div>
+    <div class="sec-hd"><span class="sec-ttl">HITTER LEADERBOARD</span><span class="sec-sub">Batters only · sorted by overturn rate</span></div>
+    <div id="cnt-hitters"><div class="empty"><div class="ico">🧢</div><h3>No data yet</h3><p>Click Refresh Data to load</p></div></div>
   </div>
   <div class="tab-panel" id="tab-fielders">
-    <div id="cnt-fielders" class="tab-content"></div>
+    <div class="sec-hd"><span class="sec-ttl">FIELDER LEADERBOARD</span><span class="sec-sub">Catchers &amp; pitchers · sorted by overturn rate</span></div>
+    <div id="cnt-fielders"><div class="empty"><div class="ico">🥎</div><h3>No data yet</h3><p>Click Refresh Data to load</p></div></div>
   </div>
   <div class="tab-panel" id="tab-umpires">
-    <div id="cnt-umpires" class="tab-content"></div>
+    <div class="sec-hd"><span class="sec-ttl">UMPIRE ACCURACY</span><span class="sec-sub">Ranked by overturn rate · min. 3 challenges</span></div>
+    <div id="cnt-umpires"><div class="empty"><div class="ico">🧑‍⚖️</div><h3>No data yet</h3><p>Click Refresh Data to load</p></div></div>
   </div>
   <div class="tab-panel" id="tab-weekly">
     <div class="sec-hd"><span class="sec-ttl">WEEKLY RECAP</span><span class="sec-sub">Last 7 days</span></div>
@@ -617,6 +620,9 @@ async function loadAll() {
     await sleep(250);
     progOff();
     updateStatus();
+    // Render all tabs so switching is instant
+    ['scorecards','hitters','fielders','umpires','weekly','studio','teamump'].forEach(t => renderTab(t));
+    // Re-render active tab last so it's visible
     renderTab(activeTab);
 
   } catch (err) {
