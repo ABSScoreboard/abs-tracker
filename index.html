@@ -180,8 +180,11 @@
 </header>
 
 <main>
+  <div style="background:rgba(0,200,122,.08);border-bottom:1px solid rgba(0,200,122,.2);padding:4px 20px;font-size:11px;color:var(--muted);font-family:var(--mono)" id="data-source-note">
+    Click Refresh Data to load
+  </div>
   <div class="status-bar" id="status-bar">
-    <div>📡 Click <strong>Refresh Data</strong> to load all 2026 ABS challenge data</div>
+    <div>📡 Click <strong>Refresh Data</strong> to load complete 2026 ABS challenge data</div>
   </div>
   <div id="prog-wrap">
     <div class="prog-lbl" id="prog-lbl">Initializing…</div>
@@ -534,41 +537,65 @@ async function fetchGameChallenges(gamePk) {
 // ═══════════════════════════════════════════════════════════
 //  MAIN PIPELINE
 // ═══════════════════════════════════════════════════════════
+// ── DATA SOURCE CONFIG ──────────────────────────────────────
+// Backend JSON served from GitHub Pages — updated 3x daily by GitHub Actions
+// Falls back to direct GUMBO API if backend is unavailable
+const BACKEND_URL = 'https://absscoreboard.github.io/abs-data/data/abs-challenges.json';
+
 async function loadAll() {
   const btn = $('refresh-btn');
   btn.disabled = true;
   btn.classList.add('spin');
   setBtn('Loading…');
   allLoading();
-  prog(5, 'Fetching schedule and umpire assignments…');
 
   try {
-    // Step 1: fetch roster positions and schedule concurrently for speed
-    prog(8, 'Fetching roster positions and game schedule…');
-    const [gamePks] = await Promise.all([
-      fetchScheduleAndUmpires(),
-      fetchRosterPositions(),  // runs in parallel — always current
-    ]);
-    if (!gamePks.length) throw new Error('No completed games found yet.');
+    // Try backend JSON first (complete Savant-quality data)
+    prog(10, 'Fetching ABS challenge data…');
+    let allChallenges = [];
+    let source = 'backend';
 
-    prog(18, `Found ${gamePks.length} games — fetching ABS challenges…`);
+    try {
+      const resp = await fetch(BACKEND_URL, { signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) throw new Error(`Backend ${resp.status}`);
+      const data = await resp.json();
 
-    // Step 2: fetch challenge data in parallel batches of 10
-    const allChallenges = [];
-    const BATCH = 10;
-    let done = 0;
-
-    for (let i = 0; i < gamePks.length; i += BATCH) {
-      const batch = gamePks.slice(i, i + BATCH);
-      const results = await Promise.allSettled(batch.map(pk => fetchGameChallenges(pk)));
-      for (const r of results) {
-        if (r.status === 'fulfilled' && r.value?.length) {
-          allChallenges.push(...r.value);
-        }
+      if (!data.challenges || !data.challenges.length) {
+        throw new Error('Backend returned empty data');
       }
-      done += batch.length;
-      prog(18 + Math.round((done / gamePks.length) * 78), `Processed ${done} / ${gamePks.length} games…`);
-      await sleep(30);
+
+      allChallenges = data.challenges;
+      const gen = data.generated_at ? new Date(data.generated_at).toLocaleString() : 'unknown';
+      console.log(`✅ Backend: ${allChallenges.length} challenges (generated ${gen})`);
+      prog(90, `Loaded ${allChallenges.length} challenges from backend…`);
+
+    } catch (backendErr) {
+      // Backend unavailable — fall back to GUMBO API
+      console.warn('Backend unavailable, falling back to GUMBO:', backendErr.message);
+      source = 'gumbo';
+      prog(15, 'Backend unavailable — fetching from MLB API…');
+
+      const [gamePks] = await Promise.all([
+        fetchScheduleAndUmpires(),
+        fetchRosterPositions(),
+      ]);
+      if (!gamePks.length) throw new Error('No completed games found yet.');
+
+      prog(20, `Found ${gamePks.length} games — fetching challenges…`);
+      const BATCH = 10;
+      let done = 0;
+      for (let i = 0; i < gamePks.length; i += BATCH) {
+        const batch = gamePks.slice(i, i + BATCH);
+        const results = await Promise.allSettled(batch.map(pk => fetchGameChallenges(pk)));
+        for (const r of results) {
+          if (r.status === 'fulfilled' && r.value?.length) {
+            allChallenges.push(...r.value);
+          }
+        }
+        done += batch.length;
+        prog(20 + Math.round((done / gamePks.length) * 68), `Processed ${done} / ${gamePks.length} games…`);
+        await sleep(30);
+      }
     }
 
     prog(97, 'Building leaderboards…');
@@ -576,11 +603,13 @@ async function loadAll() {
       challenges: allChallenges,
       players:    buildPlayerStats(allChallenges),
       umpires:    buildUmpireStats(allChallenges),
+      source:     source,
     };
     lastUpdated = new Date();
 
     const ov = allChallenges.filter(c => c.result === 'Overturned').length;
-    console.log(`✅ DONE: ${allChallenges.length} total challenges, ${ov} overturned (${allChallenges.length ? Math.round(100*ov/allChallenges.length) : 0}%)`);
+    const pct = allChallenges.length ? Math.round(100 * ov / allChallenges.length) : 0;
+    console.log(`✅ DONE (${source}): ${allChallenges.length} challenges, ${ov} overturned (${pct}%)`);
 
     prog(100, 'Done!');
     await sleep(250);
@@ -995,6 +1024,14 @@ function updateStatus() {
     <div>📊 Rate: <strong>${pct}%</strong></div><div class="sdiv"></div>
     <div>🎮 Games: <strong>${games}</strong></div><div class="sdiv"></div>
     <div>🕐 Updated: <strong>${lastUpdated?.toLocaleTimeString() || '—'}</strong></div>`;
+
+  // Show data source
+  const srcEl = document.getElementById('data-source-note');
+  if (srcEl) {
+    srcEl.textContent = DB.source === 'backend'
+      ? '✅ Complete data via backend (Baseball Savant quality)'
+      : '⚠️ Partial data via MLB GUMBO API (backend unavailable)';
+  }
 }
 
 // Twitter-accurate character count.
